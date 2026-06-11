@@ -1,0 +1,1279 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Campori de Líderes APV</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; overscroll-behavior: none; }
+    #app { min-height: 100dvh; background: #f0f4f8; }
+    .modal-overlay { position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;display:flex;align-items:flex-end;justify-content:center; }
+    .modal-overlay.center { align-items:center;padding:1rem; }
+    .modal-content { background:#fff;border-radius:1.5rem 1.5rem 0 0;width:100%;max-width:600px;max-height:92dvh;overflow-y:auto;padding:1.5rem; }
+    .modal-overlay.center .modal-content { border-radius:1.5rem; }
+    .badge-pending  { background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px; }
+    .badge-approved { background:#d1fae5;color:#065f46;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px; }
+    .badge-rejected { background:#fee2e2;color:#991b1b;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px; }
+    .badge-judge    { background:#ede9fe;color:#5b21b6;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px; }
+    .upload-area { border:2px dashed #cbd5e1;border-radius:.875rem;padding:1.5rem;text-align:center;cursor:pointer;transition:all .2s; }
+    .upload-area:hover { border-color:#1e3a8a;background:#eff6ff; }
+    .upload-area.filled { border-color:#16a34a;background:#f0fdf4;border-style:solid; }
+    input[type="file"] { display:none; }
+    .tab-btn { flex:1;padding:.75rem .25rem;text-align:center;font-size:.78rem;font-weight:600;color:#6b7280;border-bottom:3px solid transparent;transition:all .15s; }
+    .tab-btn.active { color:#1e3a8a;border-bottom-color:#1e3a8a; }
+    .spinner { width:2rem;height:2rem;border:3px solid #e2e8f0;border-top-color:#1e3a8a;border-radius:50%;animation:spin .7s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    button:active { opacity:.85;transform:scale(.97); }
+    ::-webkit-scrollbar { width:4px; }
+    ::-webkit-scrollbar-thumb { background:#cbd5e1;border-radius:2px; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div style="display:flex;align-items:center;justify-content:center;min-height:100dvh;">
+    <div class="spinner"></div>
+  </div>
+</div>
+
+<script type="module">
+import { initializeApp }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import {
+  getFirestore, collection, doc, getDocs, addDoc, updateDoc, deleteDoc,
+  query, where, orderBy, onSnapshot, serverTimestamp, setDoc, getDoc
+} from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+// Firebase Storage removido — usando Cloudinary
+
+// ════════════════════════════════════════
+//  FIREBASE CONFIG
+// ════════════════════════════════════════
+const firebaseConfig = {
+  apiKey:            "AIzaSyAUSqOEZ06Tekk-YMvX0X4UQpENJWhFm3g",
+  authDomain:        "campori-apv.firebaseapp.com",
+  projectId:         "campori-apv",
+  storageBucket:     "campori-apv.firebasestorage.app",
+  messagingSenderId: "235508891969",
+  appId:             "1:235508891969:web:58944479146eef0fc261c0",
+  measurementId:     "G-X4T1MDX06Y"
+};
+
+const fbApp = initializeApp(firebaseConfig);
+const db = getFirestore(fbApp);
+
+// ════════════════════════════════════════
+//  SUPABASE STORAGE CONFIG
+// ════════════════════════════════════════
+const UPLOAD_SERVER = 'https://files.gdtmidia.com.br';
+
+// ════════════════════════════════════════
+//  CONSTANTES
+// ════════════════════════════════════════
+const REGIONS = [
+  {id:'001R1', name:'1ª Região'}, {id:'002R2',  name:'2ª Região'},
+  {id:'003R3', name:'3ª Região'}, {id:'004R4',  name:'4ª Região'},
+  {id:'005R5', name:'5ª Região'}, {id:'006R6',  name:'6ª Região'},
+  {id:'007R7', name:'7ª Região'}, {id:'008R8',  name:'8ª Região'},
+  {id:'009R9', name:'9ª Região'}, {id:'010R10', name:'10ª Região'},
+  {id:'011R11',name:'11ª Região'},{id:'012R12', name:'12ª Região'},
+  {id:'013R13',name:'13ª Região'},{id:'014R14', name:'14ª Região'},
+  {id:'015R15',name:'15ª Região'},{id:'016R16', name:'16ª Região'},
+];
+const CATEGORIES = ['ADM','Nas Casas','Nos Templos','Nas Ruas','Acampamento','Cozinha','Saúde','Eventos','Outros'];
+const PHASES     = ['Pré-Requisito','No Campori'];
+
+// ════════════════════════════════════════
+//  CONFIG (carregado do Firestore)
+// ════════════════════════════════════════
+let CFG = {
+  adminPassword:  'campori2025',
+  judgePassword:  'juiz2025',
+  regionPasswords: {} // { '001R1': '1234', ... }
+};
+
+async function loadConfig() {
+  try {
+    const snap = await getDoc(doc(db,'config','appConfig'));
+    if (snap.exists()) CFG = { ...CFG, ...snap.data() };
+  } catch(e) { console.warn('Config load failed', e); }
+}
+
+async function saveConfig() {
+  await setDoc(doc(db,'config','appConfig'), CFG);
+}
+
+// ════════════════════════════════════════
+//  ESTADO
+// ════════════════════════════════════════
+const S = {
+  view:         'home',
+  regionId:     null,
+  adminAuthed:  false,
+  adminTab:     'queue',   // queue | requirements | history | config
+  judgeAuthed:  false,
+  judgeCategory:null,
+  judgeRegionId:null,
+  modal:        null,      // region | region-pwd | submit | req-form | photo | judge-login
+  selectedReq:  null,
+  editingReq:   null,
+  photoFile:    null,
+  photoUrl:     null,
+  filterCat:    'Todos',
+  filterStatus: 'Todos',
+  loading:      false,
+  requirements: [],
+  submissions:  [],
+  pendingRegion:null, // region waiting for password
+};
+
+let _unsubSubs = null;
+let _unsubReqs = null;
+
+// ════════════════════════════════════════
+//  HELPERS
+// ════════════════════════════════════════
+const app    = document.getElementById('app');
+const rname  = id => REGIONS.find(r=>r.id===id)?.name || id;
+const fmtDate= ts => {
+  if (!ts) return '';
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+};
+const badge = (status, source) => {
+  if (source==='judge') return '<span class="badge-judge">⚖️ Juiz</span>';
+  if (status==='approved') return '<span class="badge-approved">✅ Aprovado</span>';
+  if (status==='rejected') return '<span class="badge-rejected">❌ Rejeitado</span>';
+  return '<span class="badge-pending">⏳ Pendente</span>';
+};
+
+function toast(msg, type='success') {
+  const bg = type==='success'?'#16a34a':type==='error'?'#dc2626':'#1e3a8a';
+  const t = document.createElement('div');
+  t.style.cssText = `position:fixed;bottom:5rem;left:50%;transform:translateX(-50%);
+    background:${bg};color:#fff;padding:.75rem 1.25rem;border-radius:1rem;
+    font-size:.875rem;font-weight:600;z-index:999;white-space:nowrap;
+    box-shadow:0 4px 20px rgba(0,0,0,.2);`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(), 3500);
+}
+
+// Banner grande de sucesso — aparece no topo da tela por 4s
+function showBanner(msg) {
+  const b = document.createElement('div');
+  b.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:998;
+    background:#15803d;color:#fff;text-align:center;padding:1.1rem 1rem;
+    font-size:1rem;font-weight:800;box-shadow:0 4px 20px rgba(0,0,0,.2);
+    animation:slideDown .3s ease;`;
+  b.innerHTML = msg;
+  document.body.appendChild(b);
+  setTimeout(()=>{ b.style.transition='opacity .4s'; b.style.opacity='0'; setTimeout(()=>b.remove(),400); }, 3500);
+  if (!document.getElementById('banner-css')) {
+    const s=document.createElement('style');
+    s.id='banner-css';
+    s.textContent='@keyframes slideDown{from{transform:translateY(-100%)}to{transform:translateY(0)}}';
+    document.head.appendChild(s);
+  }
+}
+
+
+// Renderiza bloco de comprovação (imagem, PDF ou vazio) para fila e histórico
+function proofBlock(url, context) {
+  if (!url) {
+    return `<div style="height:52px;background:#f8fafc;display:flex;align-items:center;
+      justify-content:center;color:#94a3b8;font-size:.82rem;">Sem arquivo anexado</div>`;
+  }
+  const isPdf = url.toLowerCase().includes('.pdf') || url.toLowerCase().includes('/raw/');
+  if (isPdf) {
+    const thumbUrl = url.replace('/upload/', '/upload/f_jpg,pg_1,w_600,c_limit/');
+    return `
+      <div style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">
+        <img src="${thumbUrl}" alt="Prévia do PDF"
+          style="width:100%;max-height:200px;object-fit:contain;display:block;background:#f1f5f9;"
+          onerror="this.style.display='none'">
+        <button onclick="window.open('${url}','_blank')"
+          style="display:flex;align-items:center;justify-content:center;gap:.5rem;
+          width:100%;padding:.75rem;background:#1e3a8a;color:#fff;font-size:.85rem;font-weight:700;
+          border:none;cursor:pointer;">
+          📄 Abrir PDF
+        </button>
+      </div>`;
+  }
+  // Imagem
+  const maxH = context==='queue' ? '220px' : '140px';
+  return `
+    <div style="cursor:pointer;position:relative;" onclick="W.openPhoto('${url}')">
+      <img src="${url}" alt="Comprovação"
+        style="width:100%;max-height:${maxH};object-fit:cover;display:block;"
+        onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+      <div style="display:none;padding:.875rem;background:#fff1f1;color:#dc2626;
+        font-size:.82rem;text-align:center;flex-direction:column;gap:.375rem;">
+        <span>⚠️ Imagem não carregou</span>
+        <a href="${url}" target="_blank" style="color:#1d4ed8;text-decoration:underline;">Abrir arquivo</a>
+      </div>
+      <div style="background:rgba(30,58,138,.85);color:#fff;text-align:center;font-size:.72rem;padding:.3rem;">
+        👆 Toque para ampliar · <a href="${url}" target="_blank" download style="color:#93c5fd;text-decoration:none;">⬇ Baixar</a>
+      </div>
+    </div>`;
+}
+
+function computeScores() {
+  const scores = {};
+  REGIONS.forEach(r=>{ scores[r.id]={name:r.name,total:0,count:0}; });
+  const counted = new Set();
+  [...S.submissions]
+    .filter(s=>s.status==='approved')
+    .sort((a,b)=>(b.submittedAt?.seconds||0)-(a.submittedAt?.seconds||0))
+    .forEach(s=>{
+      const key=`${s.regionId}:${s.requirementId}`;
+      if (!counted.has(key) && scores[s.regionId]) {
+        counted.add(key);
+        scores[s.regionId].total += s.requirementPoints||0;
+        scores[s.regionId].count++;
+      }
+    });
+  return Object.entries(scores).map(([id,v])=>({id,...v})).sort((a,b)=>b.total-a.total);
+}
+
+// ════════════════════════════════════════
+//  FIREBASE OPS
+// ════════════════════════════════════════
+function subSubs(regionId) {
+  if (_unsubSubs) _unsubSubs();
+  S.submissions = []; // ← limpa imediatamente para evitar dados da consulta anterior
+  // Sem orderBy no filtro de região para evitar exigir índice composto no Firestore
+  const q = regionId
+    ? query(collection(db,'submissions'),where('regionId','==',regionId))
+    : query(collection(db,'submissions'),orderBy('submittedAt','desc'));
+  _unsubSubs = onSnapshot(q, snap=>{
+    const docs = snap.docs.map(d=>({id:d.id,...d.data()}));
+    // Ordena no cliente para não exigir índice composto
+    docs.sort((a,b)=>(b.submittedAt?.seconds||0)-(a.submittedAt?.seconds||0));
+    S.submissions = docs;
+    render();
+  }, err=>{
+    console.error('Firestore onSnapshot error:', err);
+    toast('Erro ao carregar dados: '+err.message,'error');
+  });
+}
+function subReqs() {
+  if (_unsubReqs) _unsubReqs();
+  _unsubReqs = onSnapshot(
+    query(collection(db,'requirements'),orderBy('order','asc')),
+    snap=>{ S.requirements=snap.docs.map(d=>({id:d.id,...d.data()})); render(); }
+  );
+}
+
+async function uploadFile(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await fetch(`${UPLOAD_SERVER}/upload`, { method: 'POST', body: fd });
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+  return data.url;
+}
+
+async function doSubmit(reqId, notes, file) {
+  S.loading = true; render();
+  try {
+    const req = S.requirements.find(r=>r.id===reqId);
+    const subRef = await addDoc(collection(db,'submissions'), {
+      regionId:S.regionId, regionName:rname(S.regionId),
+      requirementId:reqId, requirementName:req.name,
+      requirementPoints:req.points, requirementCategory:req.category,
+      notes, proofUrl:null, status:'pending',
+      submittedAt:serverTimestamp(), source:'region'
+    });
+    // Fecha modal imediatamente
+    S.modal=null; S.selectedReq=null; S.photoFile=null; S.loading=false; render();
+    showBanner('✅ Requisito registrado! Aguardando aprovação.');
+
+    // Upload Cloudinary em segundo plano
+    if (file) {
+      try {
+        const url = await uploadFile(file);
+        await updateDoc(doc(db,'submissions',subRef.id), { proofUrl: url });
+        toast('📎 Arquivo enviado com sucesso!');
+      } catch(uploadErr) {
+        console.error('Upload error:', uploadErr);
+        toast(`⚠️ Falha no upload: ${uploadErr.message}`, 'error');
+      }
+    }
+  } catch(e) {
+    console.error(e); toast('Erro ao enviar. Tente novamente.','error');
+    S.loading=false; render();
+  }
+}
+
+async function review(subId, status, reason='') {
+  await updateDoc(doc(db,'submissions',subId),{
+    status, rejectionReason:reason, reviewedAt:serverTimestamp()
+  });
+  const msgs = {approved:'✅ Aprovado! Pontos computados.', rejected:'❌ Comprovação rejeitada.', pending:'🔄 Reaberto para revisão.'};
+  toast(msgs[status]||'Atualizado.', status==='approved'?'success':status==='pending'?'info':'error');
+}
+
+async function doJudgeScore(reqId, regionId, pts) {
+  const req = S.requirements.find(r=>r.id===reqId);
+  // Verifica se já existe pontuação do juiz para esta região+requisito
+  const existing = S.submissions.find(s=>
+    s.regionId===regionId && s.requirementId===reqId && s.source==='judge'
+  );
+  if (existing) {
+    await updateDoc(doc(db,'submissions',existing.id),{
+      requirementPoints:pts, reviewedAt:serverTimestamp(), notes:`Juiz: ${S.judgeCategory}`
+    });
+  } else {
+    await addDoc(collection(db,'submissions'),{
+      regionId, regionName:rname(regionId),
+      requirementId:reqId, requirementName:req.name,
+      requirementPoints:pts, requirementCategory:req.category,
+      notes:`Avaliado por Juiz: ${S.judgeCategory}`,
+      proofUrl:null, status:'approved',
+      submittedAt:serverTimestamp(), source:'judge'
+    });
+  }
+  toast(`✅ ${req.name} — ${pts} pts`);
+}
+
+async function saveReq(data) {
+  S.loading=true; render();
+  try {
+    if (data.id) { const {id,...r}=data; await updateDoc(doc(db,'requirements',id),r); }
+    else { await addDoc(collection(db,'requirements'),{...data,order:S.requirements.length,active:true}); }
+    S.modal=null; S.editingReq=null; toast('Requisito salvo! ✅');
+  } catch(e) { toast('Erro ao salvar.','error'); }
+  S.loading=false; render();
+}
+async function delReq(id) {
+  if (!confirm('Excluir este requisito?')) return;
+  await deleteDoc(doc(db,'requirements',id));
+  toast('Excluído.','info');
+}
+
+// ════════════════════════════════════════
+//  VIEWS — HOME
+// ════════════════════════════════════════
+function vHome() {
+  return `
+  <div style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    background:linear-gradient(160deg,#1e3a8a 0%,#1d4ed8 60%,#2563eb 100%);padding:2rem;">
+    <div style="text-align:center;margin-bottom:2.5rem;">
+      <div style="font-size:4rem;margin-bottom:.75rem;">⛺</div>
+      <h1 style="font-size:1.75rem;font-weight:800;color:#fff;margin:0;">Campori de Líderes</h1>
+      <p style="color:#93c5fd;font-size:1rem;margin:.25rem 0 0;">APV — Sistema de Pontuação</p>
+    </div>
+    <div style="width:100%;max-width:340px;display:flex;flex-direction:column;gap:.875rem;">
+      <button onclick="W.openRegionModal()"
+        style="width:100%;background:#fff;color:#1e3a8a;border:none;padding:1.125rem;
+        border-radius:1rem;font-size:1.05rem;font-weight:800;cursor:pointer;
+        box-shadow:0 4px 24px rgba(0,0,0,.18);">
+        📋 &nbsp;Acessar Minha Região
+      </button>
+      <button onclick="W.nav('judge')"
+        style="width:100%;background:rgba(139,92,246,.35);color:#fff;border:1.5px solid rgba(167,139,250,.5);
+        padding:1.125rem;border-radius:1rem;font-size:1.05rem;font-weight:700;cursor:pointer;">
+        ⚖️ &nbsp;Portal dos Juízes
+      </button>
+      <button onclick="W.nav('ranking')"
+        style="width:100%;background:rgba(255,255,255,.15);color:#fff;border:1.5px solid rgba(255,255,255,.3);
+        padding:1.125rem;border-radius:1rem;font-size:1.05rem;font-weight:700;cursor:pointer;">
+        🏆 &nbsp;Ver Ranking
+      </button>
+    </div>
+    <button onclick="W.nav('admin')"
+      style="margin-top:2rem;background:none;border:none;color:#93c5fd;font-size:.85rem;cursor:pointer;">
+      🔐 Administração
+    </button>
+  </div>`;
+}
+
+// ════════════════════════════════════════
+//  MODAL — SELECIONAR REGIÃO
+// ════════════════════════════════════════
+function mRegion() {
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content">
+      <h2 style="font-size:1.25rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">Selecionar Região</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.625rem;max-height:65dvh;overflow-y:auto;">
+        ${REGIONS.map(r=>`
+          <button onclick="W.selectRegion('${r.id}')"
+            style="padding:.875rem .75rem;border:1.5px solid #e2e8f0;border-radius:.875rem;
+            text-align:left;background:#fff;cursor:pointer;">
+            <div style="font-size:.7rem;color:#94a3b8;">${r.id}</div>
+            <div style="font-weight:700;color:#1e293b;font-size:.9rem;">${r.name}</div>
+          </button>
+        `).join('')}
+      </div>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:1rem;padding:.875rem;background:none;border:none;color:#94a3b8;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ════════════════════════════════════════
+//  MODAL — SENHA DA REGIÃO
+// ════════════════════════════════════════
+function mRegionPwd() {
+  const r = REGIONS.find(x=>x.id===S.pendingRegion);
+  const hasCode = !!CFG.regionPasswords[S.pendingRegion];
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:360px;">
+      <div style="text-align:center;margin-bottom:1.25rem;">
+        <div style="font-size:2.5rem;margin-bottom:.5rem;">🔒</div>
+        <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0;">${r?.name}</h2>
+        <p style="font-size:.85rem;color:#64748b;margin:.25rem 0 0;">Digite o código da sua região</p>
+      </div>
+      <input type="text" id="region-pwd" maxlength="10"
+        placeholder="Código de acesso"
+        style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:1rem;
+        font-size:1.2rem;text-align:center;letter-spacing:.2rem;outline:none;text-transform:uppercase;"
+        onkeydown="if(event.key==='Enter')W.checkRegionPwd()">
+      <button onclick="W.checkRegionPwd()"
+        style="width:100%;margin-top:.875rem;background:#1e3a8a;color:#fff;border:none;
+        padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;">
+        Entrar
+      </button>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.5rem;padding:.875rem;background:none;border:none;color:#94a3b8;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ════════════════════════════════════════
+//  VIEW — PORTAL DA REGIÃO
+// ════════════════════════════════════════
+function vPortal() {
+  const reg = REGIONS.find(r=>r.id===S.regionId);
+  // FILTRO POR REGIÃO: garante que só aparecem dados desta região
+  const mySubs = S.submissions.filter(s=>s.regionId===S.regionId);
+  const subByReq = {};
+  mySubs.forEach(s=>{
+    const cur = subByReq[s.requirementId];
+    if (!cur||(s.submittedAt?.seconds||0)>(cur.submittedAt?.seconds||0)) subByReq[s.requirementId]=s;
+  });
+  const approved = mySubs.filter(s=>s.status==='approved').reduce((a,s)=>a+(s.requirementPoints||0),0);
+  const pending  = mySubs.filter(s=>s.status==='pending').reduce((a,s)=>a+(s.requirementPoints||0),0);
+  const cats = ['Todos',...new Set(S.requirements.map(r=>r.category))];
+  const list = (S.filterCat==='Todos'?S.requirements:S.requirements.filter(r=>r.category===S.filterCat))
+    .filter(r=>r.active!==false);
+
+  return `
+  <div style="min-height:100dvh;background:#f0f4f8;">
+    <div style="background:linear-gradient(135deg,#1e3a8a,#1d4ed8);color:#fff;padding:1rem 1rem 1.5rem;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
+        <button onclick="W.nav('home')" style="background:none;border:none;color:#93c5fd;cursor:pointer;font-size:.85rem;">← Início</button>
+        <button onclick="W.nav('ranking')" style="background:none;border:none;color:#93c5fd;cursor:pointer;font-size:.85rem;">🏆 Ranking</button>
+      </div>
+      <h1 style="font-size:1.3rem;font-weight:800;margin:0;">${reg?.name||S.regionId}</h1>
+      <p style="color:#93c5fd;font-size:.8rem;margin:.2rem 0 1rem;">Portal de Comprovações</p>
+      <div style="display:flex;gap:.75rem;">
+        <div style="background:rgba(255,255,255,.18);border-radius:.875rem;padding:.75rem 1rem;text-align:center;flex:1;">
+          <div style="font-size:1.6rem;font-weight:800;">${approved}</div>
+          <div style="font-size:.7rem;color:#93c5fd;">pts aprovados</div>
+        </div>
+        <div style="background:rgba(255,255,255,.18);border-radius:.875rem;padding:.75rem 1rem;text-align:center;flex:1;">
+          <div style="font-size:1.6rem;font-weight:800;color:#fde68a;">${pending}</div>
+          <div style="font-size:.7rem;color:#93c5fd;">pts pendentes</div>
+        </div>
+        <div style="background:rgba(255,255,255,.18);border-radius:.875rem;padding:.75rem 1rem;text-align:center;flex:1;">
+          <div style="font-size:1.6rem;font-weight:800;">${mySubs.length}</div>
+          <div style="font-size:.7rem;color:#93c5fd;">enviados</div>
+        </div>
+      </div>
+    </div>
+    <div style="background:#fff;border-bottom:1px solid #f1f5f9;padding:.625rem 1rem;display:flex;gap:.5rem;overflow-x:auto;">
+      ${cats.map(c=>`
+        <button onclick="W.filterCat('${c}')"
+          style="white-space:nowrap;padding:.375rem .875rem;border-radius:999px;border:none;
+          font-size:.8rem;font-weight:600;cursor:pointer;
+          background:${S.filterCat===c?'#1e3a8a':'#f1f5f9'};
+          color:${S.filterCat===c?'#fff':'#64748b'};">
+          ${c}
+        </button>
+      `).join('')}
+    </div>
+    <div style="padding:1rem;display:flex;flex-direction:column;gap:.75rem;padding-bottom:5rem;">
+      ${list.length===0?`
+        <div style="text-align:center;padding:4rem 1rem;color:#94a3b8;">
+          <div style="font-size:3rem;margin-bottom:.75rem;">📋</div>
+          <p style="font-weight:600;">Nenhum requisito cadastrado ainda</p>
+        </div>`
+      :list.map(req=>{
+        const sub = subByReq[req.id];
+        const isApproved = sub?.status==='approved';
+        const isPending  = sub?.status==='pending';
+        const isRejected = sub?.status==='rejected';
+        const bl = isApproved?'4px solid #16a34a':isPending?'4px solid #f59e0b':isRejected?'4px solid #ef4444':'none';
+        return `
+        <div style="background:#fff;border-radius:1rem;border:1px solid #e2e8f0;border-left:${bl};
+          padding:1rem;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem;">
+            <div style="flex:1;">
+              <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem;">
+                <span style="background:#f1f5f9;color:#475569;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.category}</span>
+                <span style="background:#dbeafe;color:#1d4ed8;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts</span>
+                ${req.phase?`<span style="background:#f0fdf4;color:#166534;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.phase}</span>`:''}
+              </div>
+              <div style="font-weight:700;color:#1e293b;font-size:.95rem;">${req.name}</div>
+              ${req.description?`<div style="font-size:.8rem;color:#64748b;margin-top:.25rem;">${req.description}</div>`:''}
+              ${sub
+                ? `<div style="margin-top:.625rem;display:flex;flex-direction:column;gap:.25rem;">
+                    ${isApproved
+                      ? `<span style="background:#d1fae5;color:#065f46;font-size:.8rem;font-weight:700;padding:.3rem .8rem;border-radius:999px;display:inline-block;">✅ Aprovado</span>`
+                      : isPending
+                        ? `<span style="background:#fef3c7;color:#92400e;font-size:.8rem;font-weight:700;padding:.3rem .8rem;border-radius:999px;display:inline-block;">⏳ Em aprovação — aguarde</span>`
+                        : `<span style="background:#fee2e2;color:#991b1b;font-size:.8rem;font-weight:700;padding:.3rem .8rem;border-radius:999px;display:inline-block;">❌ Recusado</span>`}
+                    ${isRejected && sub.rejectionReason
+                      ? `<div style="font-size:.8rem;color:#b91c1c;background:#fff1f1;border-radius:.5rem;padding:.4rem .75rem;">
+                           <strong>Motivo:</strong> ${sub.rejectionReason}
+                         </div>`
+                      : ''}
+                  </div>`
+                : `<div style="margin-top:.5rem;font-size:.8rem;color:#94a3b8;">Não enviado</div>`}
+            </div>
+            <div style="flex-shrink:0;">
+              ${isApproved?`<span style="font-size:1.75rem;">✅</span>`:
+                isPending?`<span style="font-size:1.75rem;">⏳</span>`:
+                `<button onclick="W.openSubmit('${req.id}')"
+                  style="background:#1e3a8a;color:#fff;border:none;padding:.5rem 1rem;
+                  border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">
+                  Enviar
+                </button>`}
+            </div>
+          </div>
+          ${isRejected?`
+            <button onclick="W.openSubmit('${req.id}')"
+              style="width:100%;margin-top:.75rem;padding:.75rem;
+              background:#eff6ff;border:1.5px solid #bfdbfe;border-radius:.75rem;color:#1d4ed8;
+              font-size:.875rem;font-weight:700;cursor:pointer;">
+              🔄 Reenviar comprovação
+            </button>
+          `:''}
+          ${isPending?`
+            <div style="margin-top:.625rem;font-size:.78rem;color:#92400e;background:#fef9c3;
+              border-radius:.5rem;padding:.4rem .75rem;text-align:center;">
+              Aguardando revisão — não é possível reenviar enquanto estiver pendente
+            </div>
+          `:''}
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+// ════════════════════════════════════════
+//  MODAL — ENVIAR COMPROVAÇÃO
+// ════════════════════════════════════════
+function mSubmit() {
+  const req = S.requirements.find(r=>r.id===S.selectedReq);
+  if (!req) return '';
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content">
+      <div style="width:2.5rem;height:.25rem;background:#e2e8f0;border-radius:999px;margin:0 auto .875rem;"></div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.5rem;">
+        <span style="background:#f1f5f9;color:#475569;font-size:.75rem;font-weight:600;padding:.25rem .75rem;border-radius:999px;">${req.category}</span>
+        <span style="background:#dbeafe;color:#1d4ed8;font-size:.75rem;font-weight:700;padding:.25rem .75rem;border-radius:999px;">${req.points} pontos</span>
+      </div>
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:.25rem 0 .5rem;">${req.name}</h2>
+      ${req.description?`<p style="font-size:.85rem;color:#64748b;margin-bottom:1rem;">${req.description}</p>`:''}
+      <div style="margin-bottom:1rem;">
+        <label style="display:block;font-size:.85rem;font-weight:700;color:#374151;margin-bottom:.5rem;">📎 Comprovação</label>
+        <div class="upload-area ${S.photoFile?'filled':''}" onclick="document.getElementById('file-inp').click()">
+          ${S.photoFile
+            ?`<div style="color:#16a34a;font-weight:700;font-size:.95rem;">✅ ${S.photoFile.name}</div>
+               <div style="font-size:.75rem;color:#6b7280;margin-top:.3rem;">Toque para trocar o arquivo</div>`
+            :`<div style="font-size:2.75rem;margin-bottom:.5rem;">📷</div>
+              <div style="font-weight:700;color:#374151;font-size:1rem;">Toque para selecionar</div>
+              <div style="font-size:.78rem;color:#9ca3af;margin-top:.3rem;">Foto ou PDF — câmera ou galeria</div>`}
+        </div>
+        <input type="file" id="file-inp" accept="image/*,application/pdf" capture="environment" onchange="W.handleFile(event)">
+      </div>
+
+      <div style="margin-bottom:1.25rem;">
+        <label style="display:block;font-size:.85rem;font-weight:700;color:#374151;margin-bottom:.5rem;">💬 Observações <span style="font-weight:400;color:#94a3b8;">(opcional)</span></label>
+        <textarea id="sub-notes" rows="2" placeholder="Informações adicionais sobre este requisito..."
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.75rem;
+          font-size:.9rem;resize:none;outline:none;font-family:inherit;"></textarea>
+      </div>
+
+      <button onclick="W.doSubmit()" ${S.loading?'disabled':''}
+        style="width:100%;background:#1e3a8a;color:#fff;border:none;padding:1.1rem;
+        border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading?.6:1};">
+        ${S.loading?'⏳ Registrando...':'✅ Enviar Comprovação'}
+      </button>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ════════════════════════════════════════
+//  VIEW — PORTAL DOS JUÍZES
+// ════════════════════════════════════════
+function vJudge() {
+  if (!S.judgeAuthed) return vJudgeLogin();
+  if (!S.judgeRegionId) return vJudgeSelectRegion();
+  return vJudgeScore();
+}
+
+function vJudgeLogin() {
+  return `
+  <div style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:1.5rem;background:linear-gradient(160deg,#4c1d95,#7c3aed);">
+    <button onclick="W.nav('home')" style="position:fixed;top:1rem;left:1rem;background:none;border:none;color:#ddd6fe;cursor:pointer;">← Início</button>
+    <div style="background:#fff;border-radius:1.5rem;padding:2rem;width:100%;max-width:340px;text-align:center;">
+      <div style="font-size:3rem;margin-bottom:.75rem;">⚖️</div>
+      <h1 style="font-size:1.5rem;font-weight:800;color:#1e293b;margin:0 0 .375rem;">Portal dos Juízes</h1>
+      <p style="font-size:.85rem;color:#94a3b8;margin:0 0 1.5rem;">Acesso restrito à comissão julgadora</p>
+      <div style="margin-bottom:1rem;">
+        <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;text-align:left;">Categoria</label>
+        <select id="judge-cat"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:1rem;
+          font-size:.95rem;outline:none;background:#fff;">
+          <option value="">Selecione sua categoria</option>
+          ${CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join('')}
+        </select>
+      </div>
+      <div style="margin-bottom:1rem;">
+        <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;text-align:left;">Senha</label>
+        <input type="password" id="judge-pwd" placeholder="••••••"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:1rem;
+          font-size:1.1rem;text-align:center;letter-spacing:.2rem;outline:none;"
+          onkeydown="if(event.key==='Enter')W.checkJudgePwd()">
+      </div>
+      <button onclick="W.checkJudgePwd()"
+        style="width:100%;background:#7c3aed;color:#fff;border:none;
+        padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;">
+        Entrar como Juiz
+      </button>
+    </div>
+  </div>`;
+}
+
+function vJudgeSelectRegion() {
+  return `
+  <div style="min-height:100dvh;background:#f5f3ff;">
+    <div style="background:linear-gradient(135deg,#4c1d95,#7c3aed);color:#fff;padding:1rem 1rem 1.5rem;">
+      <button onclick="W.judgeOut()" style="background:none;border:none;color:#ddd6fe;cursor:pointer;font-size:.85rem;display:block;margin-bottom:.5rem;">← Sair</button>
+      <h1 style="font-size:1.3rem;font-weight:800;margin:0;">⚖️ Juiz — ${S.judgeCategory}</h1>
+      <p style="color:#ddd6fe;font-size:.85rem;margin:.25rem 0 0;">Selecione a região a avaliar</p>
+    </div>
+    <div style="padding:1rem;display:grid;grid-template-columns:1fr 1fr;gap:.625rem;">
+      ${REGIONS.map(r=>{
+        const judgeScore = S.submissions.filter(s=>s.regionId===r.id && s.source==='judge' && s.requirementCategory===S.judgeCategory);
+        const pts = judgeScore.reduce((a,s)=>a+(s.requirementPoints||0),0);
+        const total = S.requirements.filter(req=>req.category===S.judgeCategory && req.active!==false).reduce((a,r)=>a+r.points,0);
+        return `
+        <button onclick="W.selectJudgeRegion('${r.id}')"
+          style="padding:1rem;border:1.5px solid #e2e8f0;border-radius:1rem;
+          text-align:left;background:#fff;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+          <div style="font-size:.7rem;color:#94a3b8;margin-bottom:.2rem;">${r.id}</div>
+          <div style="font-weight:700;color:#1e293b;font-size:.9rem;">${r.name}</div>
+          <div style="font-size:.75rem;color:#7c3aed;font-weight:600;margin-top:.375rem;">
+            ${pts} / ${total} pts
+          </div>
+        </button>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+function vJudgeScore() {
+  const reg = REGIONS.find(r=>r.id===S.judgeRegionId);
+  const reqs = S.requirements.filter(r=>r.category===S.judgeCategory && r.active!==false);
+  const existingScores = {};
+  S.submissions.filter(s=>s.regionId===S.judgeRegionId && s.source==='judge').forEach(s=>{
+    existingScores[s.requirementId] = s;
+  });
+
+  return `
+  <div style="min-height:100dvh;background:#f5f3ff;">
+    <div style="background:linear-gradient(135deg,#4c1d95,#7c3aed);color:#fff;padding:1rem 1rem 1.5rem;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+          <button onclick="W.selectJudgeRegion(null)" style="background:none;border:none;color:#ddd6fe;cursor:pointer;font-size:.85rem;display:block;margin-bottom:.25rem;">← Regiões</button>
+          <h1 style="font-size:1.25rem;font-weight:800;margin:0;">⚖️ ${reg?.name}</h1>
+          <p style="color:#ddd6fe;font-size:.82rem;margin:.25rem 0 0;">Categoria: ${S.judgeCategory}</p>
+        </div>
+        <button onclick="W.judgeOut()" style="background:rgba(0,0,0,.2);border:none;color:#fff;padding:.4rem .875rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">Sair</button>
+      </div>
+    </div>
+    <div style="padding:1rem;display:flex;flex-direction:column;gap:.75rem;padding-bottom:5rem;">
+      ${reqs.length===0?`
+        <div style="text-align:center;padding:4rem 1rem;color:#94a3b8;">
+          <div style="font-size:3rem;margin-bottom:.75rem;">📋</div>
+          <p style="font-weight:600;">Nenhum requisito nesta categoria</p>
+        </div>`
+      :reqs.map(req=>{
+        const existing = existingScores[req.id];
+        const scored = !!existing;
+        return `
+        <div style="background:#fff;border-radius:1rem;border:1px solid ${scored?'#a78bfa':'#e2e8f0'};
+          border-left:4px solid ${scored?'#7c3aed':'#e2e8f0'};
+          padding:1rem;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+          <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem;">
+            <span style="background:#ede9fe;color:#6d28d9;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts máx</span>
+            ${req.phase?`<span style="background:#f0fdf4;color:#166534;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.phase}</span>`:''}
+            ${scored?`<span class="badge-judge">⚖️ Pontuado: ${existing.requirementPoints} pts</span>`:''}
+          </div>
+          <div style="font-weight:700;color:#1e293b;font-size:.95rem;margin-bottom:.5rem;">${req.name}</div>
+          ${req.description?`<div style="font-size:.8rem;color:#64748b;margin-bottom:.75rem;">${req.description}</div>`:''}
+          <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+            <input type="number" id="pts-${req.id}" value="${existing?.requirementPoints??''}"
+              min="0" max="${req.points}" placeholder="0"
+              style="width:80px;border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.5rem;
+              font-size:1rem;text-align:center;outline:none;font-weight:700;">
+            <span style="font-size:.85rem;color:#64748b;">/ ${req.points} pts</span>
+            <button onclick="W.submitJudgeScore('${req.id}','${S.judgeRegionId}')"
+              style="flex:1;min-width:120px;background:#7c3aed;color:#fff;border:none;
+              padding:.625rem 1rem;border-radius:.75rem;font-size:.9rem;font-weight:700;cursor:pointer;">
+              ${scored?'🔄 Atualizar':'✅ Confirmar'}
+            </button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+// ════════════════════════════════════════
+//  VIEW — ADMIN
+// ════════════════════════════════════════
+function vAdmin() {
+  if (!S.adminAuthed) return vAdminLogin();
+  const pendingCount = S.submissions.filter(s=>s.status==='pending' && s.source!=='judge').length;
+  const tabs = [
+    {id:'queue',label:'📋 Fila',count:pendingCount},
+    {id:'requirements',label:'⚙️ Requisitos',count:null},
+    {id:'history',label:'📂 Histórico',count:null},
+    {id:'config',label:'🔑 Senhas',count:null},
+  ];
+  return `
+  <div style="min-height:100dvh;background:#f0f4f8;">
+    <div style="background:linear-gradient(135deg,#14532d,#166534);color:#fff;padding:1rem;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <button onclick="W.nav('home')" style="background:none;border:none;color:#bbf7d0;font-size:.8rem;cursor:pointer;display:block;margin-bottom:.25rem;">← Início</button>
+          <h1 style="font-size:1.25rem;font-weight:800;margin:0;">Painel ADM</h1>
+        </div>
+        <button onclick="W.adminOut()" style="background:rgba(0,0,0,.2);border:none;color:#fff;padding:.5rem 1rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">Sair</button>
+      </div>
+    </div>
+    <div style="background:#fff;border-bottom:1px solid #f1f5f9;display:flex;">
+      ${tabs.map(t=>`
+        <button class="tab-btn ${S.adminTab===t.id?'active':''}" onclick="W.setTab('${t.id}')">
+          ${t.label}${t.count?`<span style="background:#ef4444;color:#fff;font-size:.65rem;font-weight:700;padding:.1rem .4rem;border-radius:999px;margin-left:.25rem;">${t.count}</span>`:''}
+        </button>
+      `).join('')}
+    </div>
+    <div style="padding:1rem;padding-bottom:5rem;">
+      ${S.adminTab==='queue'        ? tQueue()   : ''}
+      ${S.adminTab==='requirements' ? tReqs()    : ''}
+      ${S.adminTab==='history'      ? tHistory() : ''}
+      ${S.adminTab==='config'       ? tConfig()  : ''}
+    </div>
+  </div>`;
+}
+
+function vAdminLogin() {
+  return `
+  <div style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1.5rem;background:#f0f4f8;">
+    <button onclick="W.nav('home')" style="position:fixed;top:1rem;left:1rem;background:none;border:none;color:#64748b;cursor:pointer;font-size:.85rem;">← Início</button>
+    <div style="background:#fff;border-radius:1.5rem;border:1px solid #e2e8f0;padding:2rem;width:100%;max-width:340px;text-align:center;">
+      <div style="font-size:3rem;margin-bottom:.75rem;">🔐</div>
+      <h1 style="font-size:1.5rem;font-weight:800;color:#1e293b;margin:0 0 .375rem;">Administração</h1>
+      <p style="font-size:.85rem;color:#94a3b8;margin:0 0 1.5rem;">Área restrita ao coordenador</p>
+      <input type="password" id="adm-pwd" placeholder="Senha"
+        style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:1rem;
+        font-size:1.1rem;text-align:center;letter-spacing:.25rem;outline:none;"
+        onkeydown="if(event.key==='Enter')W.checkPwd()">
+      <button onclick="W.checkPwd()"
+        style="width:100%;margin-top:.875rem;background:#166534;color:#fff;border:none;
+        padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;">
+        Entrar
+      </button>
+    </div>
+  </div>`;
+}
+
+// ── FILA ──────────────────────────────────────────────────
+function tQueue() {
+  const pending = S.submissions.filter(s=>s.status==='pending' && s.source!=='judge');
+  if (!pending.length) return `
+    <div style="text-align:center;padding:4rem 1rem;color:#94a3b8;">
+      <div style="font-size:3.5rem;margin-bottom:.75rem;">🎉</div>
+      <p style="font-weight:700;font-size:1.05rem;">Nenhuma comprovação pendente!</p>
+    </div>`;
+  return `
+    <p style="font-size:.8rem;color:#94a3b8;margin-bottom:.875rem;">${pending.length} aguardando revisão</p>
+    <div style="display:flex;flex-direction:column;gap:.875rem;">
+      ${pending.map(sub=>`
+        <div style="background:#fff;border-radius:1.125rem;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06);">
+          ${proofBlock(sub.proofUrl, 'queue')}
+          <div style="padding:1rem;">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;margin-bottom:.875rem;">
+              <div>
+                <div style="font-weight:800;color:#1e293b;font-size:.95rem;">${sub.requirementName}</div>
+                <div style="font-size:.82rem;color:#64748b;margin-top:.15rem;">${sub.regionName} · <strong style="color:#1d4ed8;">${sub.requirementPoints} pts</strong></div>
+                <div style="font-size:.72rem;color:#94a3b8;margin-top:.15rem;">${fmtDate(sub.submittedAt)}</div>
+                ${sub.notes?`<div style="background:#f8fafc;border-radius:.625rem;padding:.5rem .75rem;font-size:.82rem;color:#475569;margin-top:.5rem;">"${sub.notes}"</div>`:''}
+              </div>
+              <span style="background:#f1f5f9;color:#475569;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;white-space:nowrap;flex-shrink:0;">${sub.requirementCategory}</span>
+            </div>
+            <div style="display:flex;gap:.75rem;">
+              <button onclick="W.approve('${sub.id}')"
+                style="flex:1;background:#16a34a;color:#fff;border:none;padding:.875rem;border-radius:.875rem;font-weight:700;font-size:.9rem;cursor:pointer;">
+                ✅ Aprovar
+              </button>
+              <button onclick="W.reject('${sub.id}')"
+                style="flex:1;background:#fee2e2;color:#dc2626;border:none;padding:.875rem;border-radius:.875rem;font-weight:700;font-size:.9rem;cursor:pointer;">
+                ❌ Rejeitar
+              </button>
+            </div>
+          </div>
+        </div>
+      `).join('')}
+    </div>`;
+}
+
+// ── REQUISITOS ────────────────────────────────────────────
+function tReqs() {
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
+      <span style="font-weight:800;color:#1e293b;">Requisitos (${S.requirements.length})</span>
+      <button onclick="W.openReqForm(null)"
+        style="background:#1e3a8a;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">
+        + Novo
+      </button>
+    </div>
+    ${S.requirements.length===0?`
+      <div style="text-align:center;padding:3rem 1rem;color:#94a3b8;">
+        <div style="font-size:3rem;margin-bottom:.75rem;">📝</div>
+        <p style="font-weight:600;">Nenhum requisito cadastrado</p>
+        <button onclick="W.openReqForm(null)" style="margin-top:1rem;background:none;border:none;color:#1d4ed8;font-weight:600;cursor:pointer;">+ Adicionar primeiro</button>
+      </div>`
+    :`<div style="display:flex;flex-direction:column;gap:.625rem;">
+      ${S.requirements.map(req=>`
+        <div style="background:#fff;border-radius:1rem;border:1px solid #e2e8f0;padding:1rem;box-shadow:0 1px 3px rgba(0,0,0,.04);">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;">
+            <div style="flex:1;">
+              <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
+                <span style="background:#f1f5f9;color:#475569;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.category}</span>
+                <span style="background:#dbeafe;color:#1d4ed8;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts</span>
+                ${req.phase?`<span style="background:#f0fdf4;color:#166534;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.phase}</span>`:''}
+                ${req.active===false?`<span style="background:#fee2e2;color:#dc2626;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">Inativo</span>`:''}
+              </div>
+              <div style="font-weight:700;color:#1e293b;font-size:.9rem;">${req.name}</div>
+              ${req.description?`<div style="font-size:.78rem;color:#64748b;margin-top:.15rem;">${req.description}</div>`:''}
+            </div>
+            <div style="display:flex;gap:.375rem;flex-shrink:0;">
+              <button onclick="W.openReqForm('${req.id}')" style="background:#eff6ff;border:none;color:#1d4ed8;padding:.5rem;border-radius:.625rem;cursor:pointer;">✏️</button>
+              <button onclick="W.delReq('${req.id}')" style="background:#fef2f2;border:none;color:#ef4444;padding:.5rem;border-radius:.625rem;cursor:pointer;">🗑️</button>
+            </div>
+          </div>
+        </div>
+      `).join('')}
+    </div>`}`;
+}
+
+// ── HISTÓRICO ─────────────────────────────────────────────
+function tHistory() {
+  const statuses = ['Todos','pending','approved','rejected'];
+  const statusLabels = {Todos:'Todos', pending:'Pendentes', approved:'Aprovados', rejected:'Rejeitados'};
+  const filtered = S.filterStatus==='Todos'
+    ? S.submissions
+    : S.submissions.filter(s=>s.status===S.filterStatus);
+
+  return `
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
+        <span style="font-weight:800;color:#1e293b;">Histórico (${filtered.length})</span>
+        <div style="display:flex;gap:.375rem;">
+          ${statuses.map(st=>`
+            <button onclick="W.filterStatus('${st}')"
+              style="padding:.3rem .75rem;border-radius:999px;border:none;font-size:.75rem;font-weight:600;cursor:pointer;
+              background:${S.filterStatus===st?'#1e3a8a':'#f1f5f9'};
+              color:${S.filterStatus===st?'#fff':'#64748b'};">
+              ${statusLabels[st]}
+            </button>
+          `).join('')}
+        </div>
+      </div>
+      ${filtered.length===0?`
+        <div style="text-align:center;padding:3rem 1rem;color:#94a3b8;">
+          <div style="font-size:3rem;margin-bottom:.75rem;">📂</div>
+          <p>Nenhum registro encontrado</p>
+        </div>`
+      :`<div style="display:flex;flex-direction:column;gap:.625rem;">
+        ${filtered.map(sub=>`
+          <div style="background:#fff;border-radius:1rem;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.04);">
+            ${proofBlock(sub.proofUrl, 'history')}
+            <div style="padding:.875rem;">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;margin-bottom:.625rem;">
+                <div>
+                  <div style="font-weight:700;color:#1e293b;font-size:.9rem;">${sub.requirementName}</div>
+                  <div style="font-size:.8rem;color:#64748b;">${sub.regionName} · <strong style="color:#1d4ed8;">${sub.requirementPoints} pts</strong></div>
+                  <div style="font-size:.7rem;color:#94a3b8;margin-top:.1rem;">${fmtDate(sub.submittedAt)}</div>
+                </div>
+                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:.25rem;flex-shrink:0;">
+                  ${badge(sub.status,sub.source)}
+                  ${sub.source==='judge'?'<span style="font-size:.65rem;color:#7c3aed;">via Juiz</span>':''}
+                </div>
+              </div>
+              ${sub.rejectionReason?`<div style="font-size:.78rem;color:#dc2626;margin-bottom:.5rem;">Motivo: ${sub.rejectionReason}</div>`:''}
+              ${sub.notes?`<div style="background:#f8fafc;border-radius:.5rem;padding:.4rem .625rem;font-size:.78rem;color:#475569;margin-bottom:.5rem;">"${sub.notes}"</div>`:''}
+              ${sub.status!=='pending'?`
+                <button onclick="W.reopen('${sub.id}')"
+                  style="width:100%;padding:.625rem;background:#f8fafc;border:1.5px solid #e2e8f0;
+                  border-radius:.75rem;color:#475569;font-size:.82rem;font-weight:600;cursor:pointer;">
+                  🔄 Reverter para revisão
+                </button>`:''}
+            </div>
+          </div>
+        `).join('')}
+      </div>`}
+    </div>`;
+}
+
+// ── CONFIGURAÇÃO DE SENHAS ────────────────────────────────
+function tConfig() {
+  return `
+    <div>
+      <h2 style="font-weight:800;color:#1e293b;margin:0 0 1.25rem;">🔑 Senhas e Códigos</h2>
+
+      <!-- Senha ADM -->
+      <div style="background:#fff;border-radius:1rem;border:1px solid #e2e8f0;padding:1rem;margin-bottom:.875rem;">
+        <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.5rem;">Senha do Administrador</label>
+        <div style="display:flex;gap:.5rem;">
+          <input id="cfg-admin-pwd" type="text" value="${CFG.adminPassword}"
+            style="flex:1;border:1.5px solid #e2e8f0;border-radius:.75rem;padding:.75rem;font-size:.9rem;outline:none;">
+          <button onclick="W.saveAdminPwd()"
+            style="background:#166534;color:#fff;border:none;padding:.75rem 1rem;border-radius:.75rem;font-weight:700;font-size:.85rem;cursor:pointer;">
+            Salvar
+          </button>
+        </div>
+      </div>
+
+      <!-- Senha dos Juízes -->
+      <div style="background:#fff;border-radius:1rem;border:1px solid #e2e8f0;padding:1rem;margin-bottom:.875rem;">
+        <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.5rem;">Senha dos Juízes</label>
+        <div style="display:flex;gap:.5rem;">
+          <input id="cfg-judge-pwd" type="text" value="${CFG.judgePassword}"
+            style="flex:1;border:1.5px solid #e2e8f0;border-radius:.75rem;padding:.75rem;font-size:.9rem;outline:none;">
+          <button onclick="W.saveJudgePwd()"
+            style="background:#7c3aed;color:#fff;border:none;padding:.75rem 1rem;border-radius:.75rem;font-weight:700;font-size:.85rem;cursor:pointer;">
+            Salvar
+          </button>
+        </div>
+      </div>
+
+      <!-- Códigos das Regiões -->
+      <div style="background:#fff;border-radius:1rem;border:1px solid #e2e8f0;padding:1rem;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
+          <label style="font-size:.82rem;font-weight:700;color:#374151;">Códigos das Regiões</label>
+          <button onclick="W.genCodes()"
+            style="background:#f1f5f9;border:none;color:#475569;padding:.4rem .875rem;border-radius:.625rem;font-size:.8rem;font-weight:600;cursor:pointer;">
+            🎲 Gerar automático
+          </button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:.5rem;max-height:320px;overflow-y:auto;">
+          ${REGIONS.map(r=>`
+            <div style="display:flex;align-items:center;gap:.5rem;">
+              <span style="font-size:.85rem;font-weight:600;color:#1e293b;width:7rem;flex-shrink:0;">${r.name}</span>
+              <input id="code-${r.id}" type="text" value="${CFG.regionPasswords[r.id]||''}"
+                placeholder="sem senha" maxlength="10"
+                style="flex:1;border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.5rem .75rem;font-size:.9rem;outline:none;text-transform:uppercase;">
+            </div>
+          `).join('')}
+        </div>
+        <button onclick="W.saveRegionCodes()"
+          style="width:100%;margin-top:1rem;background:#1e3a8a;color:#fff;border:none;
+          padding:.875rem;border-radius:.875rem;font-weight:700;font-size:.9rem;cursor:pointer;">
+          💾 Salvar códigos das regiões
+        </button>
+      </div>
+    </div>`;
+}
+
+// ── REQ FORM MODAL ────────────────────────────────────────
+function mReqForm() {
+  const r = S.editingReq;
+  const isEdit = !!r?.id;
+  const inp = (id,val,ph,type='text') =>
+    `<input id="${id}" type="${type}" value="${val||''}" placeholder="${ph}"
+      style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;font-family:inherit;">`;
+  const sel = (id,opts,cur) =>
+    `<select id="${id}" style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
+      ${opts.map(o=>`<option value="${o}" ${cur===o?'selected':''}>${o}</option>`).join('')}
+    </select>`;
+  const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
+
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content">
+      <div style="width:2.5rem;height:.25rem;background:#e2e8f0;border-radius:999px;margin:0 auto .875rem;"></div>
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">${isEdit?'Editar':'Novo'} Requisito</h2>
+      <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>${lbl('Nome *')}${inp('rq-name',r?.name,'Ex: Planejamento Anual')}</div>
+        <div>${lbl('Descrição')}
+          <textarea id="rq-desc" rows="2" placeholder="Orientações..."
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;resize:none;outline:none;font-family:inherit;">${r?.description||''}</textarea>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;">
+          <div>${lbl('Categoria *')}${sel('rq-cat',CATEGORIES,r?.category)}</div>
+          <div>${lbl('Fase *')}${sel('rq-phase',PHASES,r?.phase)}</div>
+        </div>
+        <div>${lbl('Pontuação *')}${inp('rq-pts',r?.points,'Ex: 50','number')}</div>
+        ${isEdit?`
+          <div style="display:flex;align-items:center;gap:.75rem;">
+            <input type="checkbox" id="rq-active" ${r?.active!==false?'checked':''} style="width:1.1rem;height:1.1rem;">
+            <label for="rq-active" style="font-size:.9rem;font-weight:600;color:#374151;">Requisito ativo</label>
+          </div>`:''}
+        <button onclick="W.saveReq()" ${S.loading?'disabled':''}
+          style="width:100%;background:#166534;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading?.6:1};">
+          ${S.loading?'⏳ Salvando...':(isEdit?'💾 Salvar':'+ Criar Requisito')}
+        </button>
+      </div>
+      <button onclick="W.closeModal()" style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ════════════════════════════════════════
+//  VIEW — RANKING PÚBLICO
+// ════════════════════════════════════════
+function vRanking() {
+  const scores = computeScores();
+  const max = scores[0]?.total||1;
+  const top3 = scores.slice(0,3);
+  return `
+  <div style="min-height:100dvh;background:linear-gradient(160deg,#1e3a8a 0%,#1d4ed8 55%,#2563eb 100%);">
+    <div style="max-width:500px;margin:0 auto;">
+      <div style="padding:1.5rem;text-align:center;position:relative;">
+        <button onclick="W.nav('home')" style="position:absolute;top:1.25rem;left:1rem;background:none;border:none;color:#93c5fd;font-size:.85rem;cursor:pointer;">← Início</button>
+        <div style="font-size:3.5rem;margin-bottom:.5rem;">🏆</div>
+        <h1 style="font-size:1.6rem;font-weight:800;color:#fff;margin:0;">Ranking Geral</h1>
+        <p style="color:#93c5fd;font-size:.85rem;margin:.25rem 0 0;">Campori de Líderes APV</p>
+      </div>
+      ${top3.length>=3?`
+      <div style="padding:0 1rem 1.5rem;display:flex;align-items:flex-end;gap:.75rem;">
+        <div style="flex:1;text-align:center;">
+          <div style="font-size:1.75rem;margin-bottom:.375rem;">🥈</div>
+          <div style="background:rgba(255,255,255,.2);border-radius:.875rem .875rem 0 0;padding:.75rem .5rem 1rem;min-height:5rem;display:flex;flex-direction:column;justify-content:flex-end;">
+            <div style="font-weight:800;color:#fff;font-size:.8rem;">${top3[1]?.name}</div>
+            <div style="color:#93c5fd;font-size:.75rem;font-weight:600;">${top3[1]?.total} pts</div>
+          </div>
+        </div>
+        <div style="flex:1;text-align:center;">
+          <div style="font-size:2.25rem;margin-bottom:.375rem;">🥇</div>
+          <div style="background:rgba(255,255,255,.3);border-radius:.875rem .875rem 0 0;padding:.75rem .5rem 1rem;min-height:7rem;display:flex;flex-direction:column;justify-content:flex-end;">
+            <div style="font-weight:800;color:#fff;font-size:.85rem;">${top3[0]?.name}</div>
+            <div style="color:#fde68a;font-size:.8rem;font-weight:800;">${top3[0]?.total} pts</div>
+          </div>
+        </div>
+        <div style="flex:1;text-align:center;">
+          <div style="font-size:1.75rem;margin-bottom:.375rem;">🥉</div>
+          <div style="background:rgba(255,255,255,.2);border-radius:.875rem .875rem 0 0;padding:.75rem .5rem 1rem;min-height:3.5rem;display:flex;flex-direction:column;justify-content:flex-end;">
+            <div style="font-weight:800;color:#fff;font-size:.8rem;">${top3[2]?.name}</div>
+            <div style="color:#93c5fd;font-size:.75rem;font-weight:600;">${top3[2]?.total} pts</div>
+          </div>
+        </div>
+      </div>`:''}
+      <div style="background:#fff;border-radius:1.5rem 1.5rem 0 0;padding:1.25rem;min-height:50dvh;">
+        <div style="display:flex;flex-direction:column;gap:.5rem;padding-bottom:3rem;">
+          ${scores.map((s,i)=>`
+            <div style="display:flex;align-items:center;gap:.875rem;padding:.875rem;border-radius:.875rem;background:${i<3?'#eff6ff':'#f8fafc'};">
+              <div style="width:2rem;text-align:center;font-weight:800;font-size:.9rem;flex-shrink:0;color:${i===0?'#ca8a04':i===1?'#6b7280':i===2?'#92400e':'#94a3b8'};">
+                ${i===0?'🥇':i===1?'🥈':i===2?'🥉':`${i+1}º`}
+              </div>
+              <div style="flex:1;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem;">
+                  <span style="font-weight:700;color:#1e293b;font-size:.9rem;">${s.name}</span>
+                  <span style="font-weight:800;color:#1d4ed8;font-size:.9rem;">${s.total} pts</span>
+                </div>
+                <div style="background:#e2e8f0;border-radius:999px;height:.4rem;">
+                  <div style="background:#1d4ed8;border-radius:999px;height:.4rem;width:${Math.round((s.total/max)*100)}%;"></div>
+                </div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+        <p style="text-align:center;font-size:.75rem;color:#94a3b8;padding-bottom:1rem;">Atualizado automaticamente em tempo real</p>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── PHOTO MODAL ───────────────────────────────────────────
+function mPhoto() {
+  return `
+  <div class="modal-overlay" style="background:rgba(0,0,0,.92);align-items:center;padding:1rem;" onclick="W.closeModal()">
+    <div style="position:relative;width:100%;max-width:500px;">
+      <button onclick="W.closeModal()" style="position:absolute;top:-2.5rem;right:0;background:rgba(255,255,255,.15);border:none;color:#fff;width:2rem;height:2rem;border-radius:50%;cursor:pointer;">✕</button>
+      <img src="${S.photoUrl}" alt="Comprovação" style="width:100%;border-radius:1rem;max-height:80dvh;object-fit:contain;">
+      <div style="display:flex;gap:.75rem;margin-top:.75rem;justify-content:center;">
+        <a href="${S.photoUrl}" target="_blank"
+          style="color:#93c5fd;font-size:.85rem;text-decoration:none;">🔗 Tela cheia</a>
+        <span style="color:#555;">·</span>
+        <a href="${S.photoUrl}" download target="_blank"
+          style="color:#93c5fd;font-size:.85rem;text-decoration:none;">⬇ Baixar</a>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ════════════════════════════════════════
+//  RENDER
+// ════════════════════════════════════════
+function render() {
+  let html = '';
+  if      (S.view==='home')    html = vHome();
+  else if (S.view==='portal')  html = vPortal();
+  else if (S.view==='admin')   html = vAdmin();
+  else if (S.view==='judge')   html = vJudge();
+  else if (S.view==='ranking') html = vRanking();
+
+  if      (S.modal==='region')     html += mRegion();
+  else if (S.modal==='region-pwd') html += mRegionPwd();
+  else if (S.modal==='submit')     html += mSubmit();
+  else if (S.modal==='req-form')   html += mReqForm();
+  else if (S.modal==='photo')      html += mPhoto();
+
+  app.innerHTML = html;
+}
+
+// ════════════════════════════════════════
+//  ACTIONS
+// ════════════════════════════════════════
+window.W = {
+  nav(view) {
+    S.view=view; S.modal=null;
+    if (view==='portal' && S.regionId) { subSubs(S.regionId); subReqs(); }
+    else if (view==='admin')   { subSubs(null); subReqs(); }
+    else if (view==='judge')   { subSubs(null); subReqs(); }
+    else if (view==='ranking') { subSubs(null); }
+    render();
+  },
+  openRegionModal() { S.modal='region'; render(); },
+  closeModal()      { S.modal=null; render(); },
+
+  // Região com senha
+  selectRegion(id) {
+    const code = CFG.regionPasswords[id];
+    if (code) { S.pendingRegion=id; S.modal='region-pwd'; render(); }
+    else { S.regionId=id; S.filterCat='Todos'; S.modal=null; W.nav('portal'); }
+  },
+  checkRegionPwd() {
+    const v = (document.getElementById('region-pwd')?.value||'').toUpperCase();
+    const expected = (CFG.regionPasswords[S.pendingRegion]||'').toUpperCase();
+    if (v===expected) { S.regionId=S.pendingRegion; S.filterCat='Todos'; S.modal=null; W.nav('portal'); }
+    else { toast('Código incorreto','error'); document.getElementById('region-pwd').value=''; }
+  },
+
+  filterCat(cat)    { S.filterCat=cat; render(); },
+  filterStatus(st)  { S.filterStatus=st; render(); },
+  openSubmit(reqId) { S.selectedReq=reqId; S.photoFile=null; S.modal='submit'; render(); },
+  handleFile(evt)   {
+    const f = evt.target.files[0]||null;
+    if (f && f.size > 10485760) {
+      toast('⚠️ Arquivo muito grande! Máximo 10 MB. Comprima a imagem ou use um PDF menor.', 'red');
+      evt.target.value = '';
+      S.photoFile = null;
+    } else {
+      S.photoFile = f;
+    }
+    render();
+  },
+  async doSubmit()  {
+    const notes = document.getElementById('sub-notes')?.value||'';
+    await doSubmit(S.selectedReq, notes, S.photoFile);
+  },
+
+  // Admin
+  checkPwd() {
+    const v = document.getElementById('adm-pwd')?.value;
+    if (v===CFG.adminPassword) { S.adminAuthed=true; subSubs(null); subReqs(); render(); }
+    else { toast('Senha incorreta','error'); document.getElementById('adm-pwd').value=''; }
+  },
+  adminOut() { S.adminAuthed=false; if(_unsubSubs)_unsubSubs(); if(_unsubReqs)_unsubReqs(); W.nav('home'); },
+  setTab(tab) { S.adminTab=tab; render(); },
+  approve(id) { review(id,'approved'); },
+  reject(id)  { const r=prompt('Motivo da rejeição (opcional):')||''; review(id,'rejected',r); },
+  reopen(id)  { if(confirm('Reverter para pendente?')) review(id,'pending'); },
+  openReqForm(id) { S.editingReq=id?S.requirements.find(r=>r.id===id):{}; S.modal='req-form'; render(); },
+  async saveReq() {
+    const name  = document.getElementById('rq-name')?.value?.trim();
+    const desc  = document.getElementById('rq-desc')?.value?.trim();
+    const cat   = document.getElementById('rq-cat')?.value;
+    const phase = document.getElementById('rq-phase')?.value;
+    const pts   = parseInt(document.getElementById('rq-pts')?.value)||0;
+    const activeEl = document.getElementById('rq-active');
+    const active   = activeEl?activeEl.checked:true;
+    if (!name) { toast('Nome é obrigatório','error'); return; }
+    if (!pts)  { toast('Pontuação inválida','error'); return; }
+    await saveReq({...(S.editingReq?.id?{id:S.editingReq.id}:{}),name,description:desc,category:cat,phase,points:pts,active});
+  },
+  delReq(id) { delReq(id); },
+  openPhoto(url) { S.photoUrl=url; S.modal='photo'; render(); },
+
+  // Config / Senhas
+  async saveAdminPwd() {
+    CFG.adminPassword = document.getElementById('cfg-admin-pwd')?.value||CFG.adminPassword;
+    await saveConfig(); toast('Senha do ADM salva!');
+  },
+  async saveJudgePwd() {
+    CFG.judgePassword = document.getElementById('cfg-judge-pwd')?.value||CFG.judgePassword;
+    await saveConfig(); toast('Senha dos Juízes salva!');
+  },
+  async saveRegionCodes() {
+    REGIONS.forEach(r=>{
+      const v = (document.getElementById(`code-${r.id}`)?.value||'').toUpperCase();
+      CFG.regionPasswords[r.id] = v;
+    });
+    await saveConfig(); toast('Códigos das regiões salvos! ✅');
+  },
+  genCodes() {
+    const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    REGIONS.forEach(r=>{
+      const code=Array.from({length:4},()=>chars[Math.floor(Math.random()*chars.length)]).join('');
+      const el = document.getElementById(`code-${r.id}`);
+      if(el) el.value=code;
+    });
+  },
+
+  // Juízes
+  checkJudgePwd() {
+    const cat = document.getElementById('judge-cat')?.value;
+    const pwd = document.getElementById('judge-pwd')?.value;
+    if (!cat) { toast('Selecione uma categoria','error'); return; }
+    if (pwd===CFG.judgePassword) {
+      S.judgeAuthed=true; S.judgeCategory=cat; S.judgeRegionId=null;
+      render();
+    } else { toast('Senha incorreta','error'); document.getElementById('judge-pwd').value=''; }
+  },
+  judgeOut() { S.judgeAuthed=false; S.judgeCategory=null; S.judgeRegionId=null; W.nav('home'); },
+  selectJudgeRegion(id) { S.judgeRegionId=id; render(); },
+  async submitJudgeScore(reqId, regionId) {
+    const pts = parseInt(document.getElementById(`pts-${reqId}`)?.value)||0;
+    const req = S.requirements.find(r=>r.id===reqId);
+    if (pts<0||pts>req.points) { toast(`Valor entre 0 e ${req.points}`,'error'); return; }
+    await doJudgeScore(reqId, regionId, pts);
+    render();
+  },
+};
+
+// ════════════════════════════════════════
+//  INIT
+// ════════════════════════════════════════
+(async () => {
+  await loadConfig();
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+# Vercel
+.vercel
+
+# Variáveis de ambiente
+.env*
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Uploads (arquivos enviados pelo servidor — não versionados)
+server/uploads/
+
+# Credenciais Google (não commitar chave privada)
+server/credentials.json

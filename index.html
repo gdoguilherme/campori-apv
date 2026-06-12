@@ -17,29 +17,29 @@
     .badge-pending{background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;}
     .badge-approved{background:#d1fae5;color:#065f46;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;}
     .badge-rejected{background:#fee2e2;color:#991b1b;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;}
-    .badge-judge{background:#ede9fe;color:#5b21b6;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;}
+    .badge-fiscal{background:#ede9fe;color:#5b21b6;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;}
     .upload-area{border:2px dashed #cbd5e1;border-radius:.875rem;padding:1.5rem;text-align:center;cursor:pointer;transition:all .2s;}
     .upload-area:hover{border-color:#1e3a8a;background:#eff6ff;}
     .upload-area.filled{border-color:#16a34a;background:#f0fdf4;border-style:solid;}
     input[type="file"]{display:none;}
-    .tab-btn{flex:1;padding:.75rem .25rem;text-align:center;font-size:.75rem;font-weight:600;color:#6b7280;border-bottom:3px solid transparent;transition:all .15s;}
+    .tab-btn{flex:1;padding:.75rem .25rem;text-align:center;font-size:.75rem;font-weight:600;color:#6b7280;border-bottom:3px solid transparent;transition:all .15s;white-space:nowrap;}
     .tab-btn.active{color:#1e3a8a;border-bottom-color:#1e3a8a;}
     .spinner{width:2rem;height:2rem;border:3px solid #e2e8f0;border-top-color:#1e3a8a;border-radius:50%;animation:spin .7s linear infinite;}
     @keyframes spin{to{transform:rotate(360deg);}}
+    .card{background:#fff;border-radius:1rem;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06);}
+    .pct-btn{padding:.35rem .55rem;border-radius:.5rem;border:1.5px solid #e2e8f0;font-size:.75rem;font-weight:700;cursor:pointer;background:#f8fafc;color:#475569;transition:all .15s;}
+    .pct-btn.sel{background:#7c3aed;color:#fff;border-color:#7c3aed;}
     button:active{opacity:.85;transform:scale(.97);}
     ::-webkit-scrollbar{width:4px;}
     ::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:2px;}
-    @media print{
-      .no-print{display:none!important;}
-      #app{background:#fff;}
-    }
+    @media print{.no-print{display:none!important;}#app{background:#fff;}}
   </style>
 </head>
 <body>
 <div id="app"><div style="display:flex;align-items:center;justify-content:center;min-height:100dvh;"><div class="spinner"></div></div></div>
 <script type="module">
 import{initializeApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import{getFirestore,collection,doc,getDocs,addDoc,updateDoc,deleteDoc,setDoc,getDoc,
+import{getFirestore,collection,doc,getDocs,addDoc,updateDoc,deleteDoc,setDoc,
   query,where,orderBy,onSnapshot,serverTimestamp}
   from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
@@ -68,19 +68,25 @@ const REGIONS=[
 ];
 const CATEGORIES=['ADM','Nas Casas','Nos Templos','Nas Ruas','Acampamento','Cozinha','Saúde','Eventos','Outros'];
 const PHASES=['Pré-Requisito','No Campori'];
-const ROLES={superadmin:'Super Admin',admin:'Administrador',approver:'Aprovador',judge:'Juiz',region:'Região'};
+// 'judge' mantido no DB para retrocompatibilidade; exibido como 'Fiscal de Prova'
+const ROLES={superadmin:'Super Admin',admin:'Administrador',approver:'Aprovador',judge:'Fiscal de Prova',region:'Região'};
+const COMP_CATS=['Ambos','DBV','AVT'];
+const EVAL_LABEL={fiscal:'Só Fiscal de Prova',region:'Só Região',both:'Fiscal e Região'};
+const SCORE_PCTS=[0,30,50,70,100];
 
 // ── ESTADO ────────────────────────────────────────────────────
 const S={
-  view:'home', currentUser:null,
-  adminTab:'queue', judgeRegionId:null,
-  modal:null, selectedReq:null, editingReq:null, editingUser:null,
-  photoFile:null, photoUrl:null,
-  filterCat:'Todos', filterStatus:'Todos',
+  view:'home',currentUser:null,
+  adminTab:'queue',fiscalRegionId:null,
+  modal:null,selectedReq:null,editingReq:null,editingUser:null,
+  photoFile:null,photoUrl:null,
+  filterCat:'Todos',filterStatus:'Todos',
+  rankingCat:'Todos',
   loading:false,
-  requirements:[], submissions:[], users:[],
-  generatedPwd:'', formRole:'',
+  requirements:[],submissions:[],users:[],
+  generatedPwd:'',formRole:'',
   firstRunPwd:null,
+  fiscalScores:{}, // {reqId:{siId:pct}}
 };
 let _unsubSubs=null,_unsubReqs=null,_unsubUsers=null;
 const app=document.getElementById('app');
@@ -93,7 +99,7 @@ const fmtDate=ts=>{
   return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'});
 };
 const badge=(status,source)=>{
-  if(source==='judge')return'<span class="badge-judge">⚖️ Juiz</span>';
+  if(source==='judge')return'<span class="badge-fiscal">⚖️ Fiscal</span>';
   if(status==='approved')return'<span class="badge-approved">✅ Aprovado</span>';
   if(status==='rejected')return'<span class="badge-rejected">❌ Rejeitado</span>';
   return'<span class="badge-pending">⏳ Pendente</span>';
@@ -105,18 +111,15 @@ function toast(msg,type='success'){
     background:${bg};color:#fff;padding:.75rem 1.25rem;border-radius:1rem;
     font-size:.875rem;font-weight:600;z-index:999;white-space:nowrap;max-width:90vw;
     box-shadow:0 4px 20px rgba(0,0,0,.2);text-align:center;`;
-  t.textContent=msg;
-  document.body.appendChild(t);
+  t.textContent=msg;document.body.appendChild(t);
   setTimeout(()=>t.remove(),3500);
 }
 function showBanner(msg){
   const b=document.createElement('div');
-  b.style.cssText=`position:fixed;top:0;left:0;right:0;z-index:998;
-    background:#15803d;color:#fff;text-align:center;padding:1.1rem 1rem;
-    font-size:1rem;font-weight:800;box-shadow:0 4px 20px rgba(0,0,0,.2);
-    animation:slideDown .3s ease;`;
-  b.innerHTML=msg;
-  document.body.appendChild(b);
+  b.style.cssText=`position:fixed;top:0;left:0;right:0;z-index:998;background:#15803d;color:#fff;
+    text-align:center;padding:1.1rem 1rem;font-size:1rem;font-weight:800;
+    box-shadow:0 4px 20px rgba(0,0,0,.2);animation:slideDown .3s ease;`;
+  b.innerHTML=msg;document.body.appendChild(b);
   setTimeout(()=>{b.style.transition='opacity .4s';b.style.opacity='0';setTimeout(()=>b.remove(),400);},3500);
   if(!document.getElementById('banner-css')){
     const s=document.createElement('style');s.id='banner-css';
@@ -133,9 +136,7 @@ function proofBlock(url,context){
     justify-content:center;color:#94a3b8;font-size:.82rem;">Sem arquivo anexado</div>`;
   const isPdf=url.toLowerCase().includes('.pdf');
   if(isPdf){
-    const thumb=url.replace('/upload/','/upload/f_jpg,pg_1,w_600,c_limit/');
-    return`<div style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">
-      <img src="${thumb}" style="width:100%;max-height:200px;object-fit:contain;display:block;background:#f1f5f9;" onerror="this.style.display='none'">
+    return`<div style="background:#f8fafc;">
       <button onclick="window.open('${url}','_blank')" style="display:flex;align-items:center;justify-content:center;gap:.5rem;width:100%;padding:.75rem;background:#1e3a8a;color:#fff;font-size:.85rem;font-weight:700;border:none;cursor:pointer;">📄 Abrir PDF</button>
     </div>`;
   }
@@ -152,21 +153,32 @@ function proofBlock(url,context){
     </div>
   </div>`;
 }
-function computeScores(){
+
+function computeScores(catFilter='Todos'){
   const scores={};
-  REGIONS.forEach(r=>{scores[r.id]={name:r.name,total:0,count:0};});
+  REGIONS.forEach(r=>{scores[r.id]={name:r.name,total:0,count:0,compCat:null};});
+  S.users.forEach(u=>{
+    if(u.role==='region'&&u.regionId&&u.competitionCategory&&scores[u.regionId])
+      scores[u.regionId].compCat=u.competitionCategory;
+  });
   const counted=new Set();
   [...S.submissions].filter(s=>s.status==='approved')
     .sort((a,b)=>(b.submittedAt?.seconds||0)-(a.submittedAt?.seconds||0))
     .forEach(s=>{
+      if(!scores[s.regionId])return;
       const key=`${s.regionId}:${s.requirementId}`;
-      if(!counted.has(key)&&scores[s.regionId]){
+      if(counted.has(key))return;
+      const req=S.requirements.find(r=>r.id===s.requirementId);
+      const reqCat=req?.competitionCategory||'Ambos';
+      if(catFilter==='Todos'||reqCat==='Ambos'||reqCat===catFilter){
         counted.add(key);
         scores[s.regionId].total+=s.requirementPoints||0;
         scores[s.regionId].count++;
       }
     });
-  return Object.entries(scores).map(([id,v])=>({id,...v})).sort((a,b)=>b.total-a.total);
+  let result=Object.entries(scores).map(([id,v])=>({id,...v})).sort((a,b)=>b.total-a.total);
+  if(catFilter!=='Todos')result=result.filter(r=>!r.compCat||r.compCat===catFilter);
+  return result;
 }
 
 // ── FIRESTORE OPS ────────────────────────────────────────────
@@ -179,7 +191,7 @@ function subSubs(regionId){
   _unsubSubs=onSnapshot(q,snap=>{
     const docs=snap.docs.map(d=>({id:d.id,...d.data()}));
     if(regionId)docs.sort((a,b)=>(b.submittedAt?.seconds||0)-(a.submittedAt?.seconds||0));
-    S.submissions=docs; render();
+    S.submissions=docs;render();
   },err=>toast('Erro ao carregar dados: '+err.message,'error'));
 }
 function subReqs(){
@@ -255,26 +267,30 @@ async function review(subId,status,reason=''){
   toast(msgs[status]||'Atualizado.',status==='approved'?'success':status==='pending'?'info':'error');
 }
 
-async function doJudgeScore(reqId,regionId,pts){
+async function doFiscalScore(reqId,regionId,totalPts,subItemScores,subItemPcts){
   const req=S.requirements.find(r=>r.id===reqId);
-  const catName=S.currentUser.judgeCategory;
   const existing=S.submissions.find(s=>s.regionId===regionId&&s.requirementId===reqId&&s.source==='judge');
+  const data={
+    requirementPoints:totalPts,
+    subItemScores:subItemScores||null,
+    subItemPcts:subItemPcts||null,
+    reviewedAt:serverTimestamp(),
+    reviewedBy:S.currentUser.username,reviewedByName:S.currentUser.name,
+    notes:`Avaliado por: ${S.currentUser.name}`
+  };
   if(existing){
-    await updateDoc(doc(db,'submissions',existing.id),{
-      requirementPoints:pts,reviewedAt:serverTimestamp(),
-      reviewedBy:S.currentUser.username,reviewedByName:S.currentUser.name,
-      notes:`Avaliado por: ${S.currentUser.name} (${catName})`
-    });
+    await updateDoc(doc(db,'submissions',existing.id),data);
   }else{
     await addDoc(collection(db,'submissions'),{
       regionId,regionName:rname(regionId),requirementId:reqId,requirementName:req.name,
-      requirementPoints:pts,requirementCategory:req.category,
-      notes:`Avaliado por: ${S.currentUser.name} (${catName})`,
+      requirementPoints:totalPts,requirementCategory:req.category,
+      notes:`Avaliado por: ${S.currentUser.name}`,
+      subItemScores:subItemScores||null,subItemPcts:subItemPcts||null,
       proofUrl:null,status:'approved',submittedAt:serverTimestamp(),source:'judge',
       reviewedBy:S.currentUser.username,reviewedByName:S.currentUser.name
     });
   }
-  toast(`✅ ${req.name} — ${pts} pts`);
+  toast(`✅ ${req.name} — ${totalPts} pts`);
 }
 
 async function saveReq(data){
@@ -292,7 +308,7 @@ async function delReq(id){
 }
 
 function exportExcel(){
-  if(typeof XLSX==='undefined'){toast('Biblioteca de exportação não carregada','error');return;}
+  if(typeof XLSX==='undefined'){toast('Biblioteca não carregada','error');return;}
   const wb=XLSX.utils.book_new();
   const rows=S.submissions.map(s=>({
     'Região':s.regionName||rname(s.regionId),
@@ -300,7 +316,7 @@ function exportExcel(){
     'Categoria':s.requirementCategory,
     'Pontos':s.requirementPoints||0,
     'Status':s.status==='approved'?'Aprovado':s.status==='rejected'?'Rejeitado':'Pendente',
-    'Fonte':s.source==='judge'?'Juiz':'Região',
+    'Fonte':s.source==='judge'?'Fiscal de Prova':'Região',
     'Enviado por':s.submittedByName||s.regionName||'—',
     'Enviado em':fmtDate(s.submittedAt),
     'Avaliado por':s.reviewedByName||'—',
@@ -308,9 +324,9 @@ function exportExcel(){
     'Observações':s.notes||''
   }));
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'Comprovações');
-  const scores=computeScores();
+  const sc=computeScores();
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(
-    scores.map((s,i)=>({'Posição':i+1,'Região':s.name,'Pontos Totais':s.total,'Aprovações':s.count}))
+    sc.map((s,i)=>({'Posição':i+1,'Região':s.name,'Pontos Totais':s.total,'Aprovações':s.count}))
   ),'Ranking');
   XLSX.writeFile(wb,`campori-${new Date().toISOString().slice(0,10)}.xlsx`);
 }
@@ -371,8 +387,7 @@ function vLogin(){
         </div>
         <button onclick="W.doLogin()" ${S.loading?'disabled':''}
           style="width:100%;background:#1e3a8a;color:#fff;border:none;padding:1.1rem;
-          border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;margin-top:.25rem;
-          opacity:${S.loading?.6:1};">
+          border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;margin-top:.25rem;opacity:${S.loading?.6:1};">
           ${S.loading?'⏳ Entrando...':'Entrar'}
         </button>
       </div>
@@ -384,6 +399,7 @@ function vLogin(){
 function vPortal(){
   const rid=S.currentUser.regionId;
   const reg=REGIONS.find(r=>r.id===rid);
+  const userCompCat=S.currentUser.competitionCategory||null;
   const mySubs=S.submissions.filter(s=>s.regionId===rid);
   const subByReq={};
   mySubs.forEach(s=>{
@@ -392,33 +408,43 @@ function vPortal(){
   });
   const approved=mySubs.filter(s=>s.status==='approved').reduce((a,s)=>a+(s.requirementPoints||0),0);
   const pending=mySubs.filter(s=>s.status==='pending').reduce((a,s)=>a+(s.requirementPoints||0),0);
-  const cats=['Todos',...new Set(S.requirements.map(r=>r.category))];
-  const list=(S.filterCat==='Todos'?S.requirements:S.requirements.filter(r=>r.category===S.filterCat))
-    .filter(r=>r.active!==false);
+
+  // filtrar requisitos pela modalidade da região
+  const visibleReqs=S.requirements.filter(r=>r.active!==false&&
+    (!userCompCat||!r.competitionCategory||r.competitionCategory==='Ambos'||r.competitionCategory===userCompCat));
+  const totalPossible=visibleReqs.reduce((a,r)=>a+r.points,0);
+
+  const cats=['Todos',...new Set(visibleReqs.map(r=>r.category))];
+  const list=S.filterCat==='Todos'?visibleReqs:visibleReqs.filter(r=>r.category===S.filterCat);
+
   return`
   <div style="min-height:100dvh;background:#f0f4f8;">
     <div style="background:linear-gradient(135deg,#1e3a8a,#1d4ed8);color:#fff;padding:1rem 1rem 1.5rem;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
         <span style="font-size:.82rem;color:#93c5fd;">👤 ${S.currentUser.name}</span>
-        <div style="display:flex;gap:.75rem;">
-          <button onclick="W.nav('ranking')" style="background:none;border:none;color:#93c5fd;cursor:pointer;font-size:.82rem;">🏆 Ranking</button>
+        <div style="display:flex;gap:.75rem;align-items:center;">
+          <button onclick="W.openChangePwd()" style="background:none;border:none;color:#93c5fd;cursor:pointer;font-size:.82rem;">🔑</button>
+          <button onclick="W.navFromPortal('ranking')" style="background:none;border:none;color:#93c5fd;cursor:pointer;font-size:.82rem;">🏆 Ranking</button>
           <button onclick="W.logout()" style="background:none;border:none;color:#93c5fd;cursor:pointer;font-size:.82rem;">Sair</button>
         </div>
       </div>
       <h1 style="font-size:1.3rem;font-weight:800;margin:0;">${reg?.name||rid}</h1>
-      <p style="color:#93c5fd;font-size:.8rem;margin:.2rem 0 1rem;">Portal de Comprovações</p>
-      <div style="display:flex;gap:.75rem;">
+      <div style="display:flex;align-items:center;gap:.5rem;margin:.2rem 0 1rem;">
+        <p style="color:#93c5fd;font-size:.8rem;margin:0;">Portal de Comprovações</p>
+        ${userCompCat?`<span style="background:rgba(255,255,255,.2);color:#fff;font-size:.72rem;font-weight:700;padding:.15rem .5rem;border-radius:999px;">${userCompCat}</span>`:''}
+      </div>
+      <div style="display:flex;gap:.625rem;">
         <div style="background:rgba(255,255,255,.18);border-radius:.875rem;padding:.75rem 1rem;text-align:center;flex:1;">
-          <div style="font-size:1.6rem;font-weight:800;">${approved}</div>
-          <div style="font-size:.7rem;color:#93c5fd;">pts aprovados</div>
+          <div style="font-size:1.5rem;font-weight:800;">${approved}</div>
+          <div style="font-size:.68rem;color:#93c5fd;">pts aprovados</div>
         </div>
         <div style="background:rgba(255,255,255,.18);border-radius:.875rem;padding:.75rem 1rem;text-align:center;flex:1;">
-          <div style="font-size:1.6rem;font-weight:800;color:#fde68a;">${pending}</div>
-          <div style="font-size:.7rem;color:#93c5fd;">pts pendentes</div>
+          <div style="font-size:1.5rem;font-weight:800;color:#fde68a;">${pending}</div>
+          <div style="font-size:.68rem;color:#93c5fd;">pts pendentes</div>
         </div>
         <div style="background:rgba(255,255,255,.18);border-radius:.875rem;padding:.75rem 1rem;text-align:center;flex:1;">
-          <div style="font-size:1.6rem;font-weight:800;">${mySubs.length}</div>
-          <div style="font-size:.7rem;color:#93c5fd;">enviados</div>
+          <div style="font-size:1.5rem;font-weight:800;color:#bbf7d0;">${totalPossible}</div>
+          <div style="font-size:.68rem;color:#93c5fd;">pts possíveis</div>
         </div>
       </div>
     </div>
@@ -428,10 +454,13 @@ function vPortal(){
         background:${S.filterCat===c?'#1e3a8a':'#f1f5f9'};color:${S.filterCat===c?'#fff':'#64748b'};">${c}</button>`).join('')}
     </div>
     <div style="padding:1rem;display:flex;flex-direction:column;gap:.75rem;padding-bottom:5rem;">
-      ${list.length===0?`<div style="text-align:center;padding:4rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">📋</div><p style="font-weight:600;">Nenhum requisito cadastrado</p></div>`
+      ${list.length===0?`<div style="text-align:center;padding:4rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">📋</div><p style="font-weight:600;">Nenhum requisito</p></div>`
       :list.map(req=>{
         const sub=subByReq[req.id];
         const isApproved=sub?.status==='approved',isPending=sub?.status==='pending',isRejected=sub?.status==='rejected';
+        const evalBy=req.evaluatedBy||'both';
+        const canSubmit=evalBy==='region'||evalBy==='both';
+        const fiscalOnly=evalBy==='fiscal';
         const bl=isApproved?'4px solid #16a34a':isPending?'4px solid #f59e0b':isRejected?'4px solid #ef4444':'none';
         return`<div style="background:#fff;border-radius:1rem;border:1px solid #e2e8f0;border-left:${bl};padding:1rem;box-shadow:0 1px 3px rgba(0,0,0,.06);">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem;">
@@ -440,11 +469,14 @@ function vPortal(){
                 <span style="background:#f1f5f9;color:#475569;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.category}</span>
                 <span style="background:#dbeafe;color:#1d4ed8;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts</span>
                 ${req.phase?`<span style="background:#f0fdf4;color:#166534;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.phase}</span>`:''}
+                ${fiscalOnly?`<span class="badge-fiscal">⚖️ Só Fiscal</span>`:''}
+                ${req.competitionCategory&&req.competitionCategory!=='Ambos'?`<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.competitionCategory}</span>`:''}
               </div>
               <div style="font-weight:700;color:#1e293b;font-size:.95rem;">${req.name}</div>
               ${req.description?`<div style="font-size:.8rem;color:#64748b;margin-top:.25rem;">${req.description}</div>`:''}
+              ${req.subItems?.length?`<div style="font-size:.78rem;color:#7c3aed;margin-top:.25rem;">📊 ${req.subItems.length} sub-iten${req.subItems.length!==1?'s':''} avaliados pelo Fiscal</div>`:''}
               ${sub?`<div style="margin-top:.625rem;">
-                ${isApproved?`<span style="background:#d1fae5;color:#065f46;font-size:.8rem;font-weight:700;padding:.3rem .8rem;border-radius:999px;display:inline-block;">✅ Aprovado</span>`
+                ${isApproved?`<span style="background:#d1fae5;color:#065f46;font-size:.8rem;font-weight:700;padding:.3rem .8rem;border-radius:999px;display:inline-block;">✅ Aprovado · ${sub.requirementPoints} pts</span>`
                 :isPending?`<span style="background:#fef3c7;color:#92400e;font-size:.8rem;font-weight:700;padding:.3rem .8rem;border-radius:999px;display:inline-block;">⏳ Em aprovação</span>`
                 :`<span style="background:#fee2e2;color:#991b1b;font-size:.8rem;font-weight:700;padding:.3rem .8rem;border-radius:999px;display:inline-block;">❌ Recusado</span>`}
                 ${isRejected&&sub.rejectionReason?`<div style="font-size:.8rem;color:#b91c1c;background:#fff1f1;border-radius:.5rem;padding:.4rem .75rem;margin-top:.375rem;"><strong>Motivo:</strong> ${sub.rejectionReason}</div>`:''}
@@ -453,11 +485,12 @@ function vPortal(){
             <div style="flex-shrink:0;">
               ${isApproved?`<span style="font-size:1.75rem;">✅</span>`
               :isPending?`<span style="font-size:1.75rem;">⏳</span>`
-              :`<button onclick="W.openSubmit('${req.id}')" style="background:#1e3a8a;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">Enviar</button>`}
+              :fiscalOnly?`<span style="font-size:1.5rem;color:#7c3aed;">⚖️</span>`
+              :canSubmit?`<button onclick="W.openSubmit('${req.id}')" style="background:#1e3a8a;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">Enviar</button>`:''}
             </div>
           </div>
-          ${isRejected?`<button onclick="W.openSubmit('${req.id}')" style="width:100%;margin-top:.75rem;padding:.75rem;background:#eff6ff;border:1.5px solid #bfdbfe;border-radius:.75rem;color:#1d4ed8;font-size:.875rem;font-weight:700;cursor:pointer;">🔄 Reenviar comprovação</button>`:''}
-          ${isPending?`<div style="margin-top:.625rem;font-size:.78rem;color:#92400e;background:#fef9c3;border-radius:.5rem;padding:.4rem .75rem;text-align:center;">Aguardando revisão — não é possível reenviar</div>`:''}
+          ${isRejected&&canSubmit?`<button onclick="W.openSubmit('${req.id}')" style="width:100%;margin-top:.75rem;padding:.75rem;background:#eff6ff;border:1.5px solid #bfdbfe;border-radius:.75rem;color:#1d4ed8;font-size:.875rem;font-weight:700;cursor:pointer;">🔄 Reenviar comprovação</button>`:''}
+          ${isPending?`<div style="margin-top:.625rem;font-size:.78rem;color:#92400e;background:#fef9c3;border-radius:.5rem;padding:.4rem .75rem;text-align:center;">Aguardando revisão</div>`:''}
         </div>`;
       }).join('')}
     </div>
@@ -478,6 +511,10 @@ function mSubmit(){
       </div>
       <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:.25rem 0 .5rem;">${req.name}</h2>
       ${req.description?`<p style="font-size:.85rem;color:#64748b;margin-bottom:1rem;">${req.description}</p>`:''}
+      ${req.subItems?.length?`<div style="background:#f5f3ff;border-radius:.75rem;padding:.75rem;margin-bottom:1rem;">
+        <div style="font-size:.82rem;font-weight:700;color:#5b21b6;margin-bottom:.375rem;">📊 Sub-itens avaliados pelo Fiscal de Prova</div>
+        <div style="font-size:.8rem;color:#6d28d9;">${req.subItems.map(si=>`• ${si.name} (${si.points} pts)`).join('<br>')}</div>
+      </div>`:''}
       <div style="margin-bottom:1rem;">
         <label style="display:block;font-size:.85rem;font-weight:700;color:#374151;margin-bottom:.5rem;">📎 Comprovação</label>
         <div class="upload-area ${S.photoFile?'filled':''}" onclick="document.getElementById('file-inp').click()">
@@ -501,52 +538,66 @@ function mSubmit(){
   </div>`;
 }
 
-// ── VIEW: PORTAL DOS JUÍZES ────────────────────────────────────
-function vJudge(){
-  if(!S.judgeRegionId)return vJudgeSelectRegion();
-  return vJudgeScore();
+// ── VIEW: FISCAL DE PROVA ─────────────────────────────────────
+function vFiscal(){
+  if(!S.fiscalRegionId)return vFiscalSelectRegion();
+  return vFiscalScore();
 }
-function vJudgeSelectRegion(){
+
+function vFiscalSelectRegion(){
   const cat=S.currentUser.judgeCategory;
   return`
   <div style="min-height:100dvh;background:#f5f3ff;">
     <div style="background:linear-gradient(135deg,#4c1d95,#7c3aed);color:#fff;padding:1rem 1rem 1.5rem;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;">
         <span style="font-size:.82rem;color:#ddd6fe;">👤 ${S.currentUser.name}</span>
-        <button onclick="W.logout()" style="background:rgba(0,0,0,.2);border:none;color:#fff;padding:.4rem .875rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">Sair</button>
+        <div style="display:flex;gap:.5rem;align-items:center;">
+          <button onclick="W.openChangePwd()" style="background:none;border:none;color:#ddd6fe;cursor:pointer;font-size:.82rem;">🔑</button>
+          <button onclick="W.logout()" style="background:rgba(0,0,0,.2);border:none;color:#fff;padding:.4rem .875rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">Sair</button>
+        </div>
       </div>
-      <h1 style="font-size:1.3rem;font-weight:800;margin:0;">⚖️ Juiz — ${cat}</h1>
-      <p style="color:#ddd6fe;font-size:.85rem;margin:.25rem 0 0;">Selecione a região a avaliar</p>
+      <h1 style="font-size:1.3rem;font-weight:800;margin:0;">⚖️ Fiscal de Prova</h1>
+      <p style="color:#ddd6fe;font-size:.85rem;margin:.25rem 0 0;">${cat?`Categoria: ${cat}`:'Selecione a região a avaliar'}</p>
     </div>
     <div style="padding:1rem;display:grid;grid-template-columns:1fr 1fr;gap:.625rem;">
       ${REGIONS.map(r=>{
-        const judgeScores=S.submissions.filter(s=>s.regionId===r.id&&s.source==='judge'&&s.requirementCategory===cat);
-        const pts=judgeScores.reduce((a,s)=>a+(s.requirementPoints||0),0);
-        const total=S.requirements.filter(req=>req.category===cat&&req.active!==false).reduce((a,r)=>a+r.points,0);
-        return`<button onclick="W.selectJudgeRegion('${r.id}')"
+        const fiscalSubs=S.submissions.filter(s=>s.regionId===r.id&&s.source==='judge'&&(!cat||s.requirementCategory===cat));
+        const pts=fiscalSubs.reduce((a,s)=>a+(s.requirementPoints||0),0);
+        const relevantReqs=S.requirements.filter(req=>req.active!==false&&(!cat||req.category===cat)&&(req.evaluatedBy==='fiscal'||req.evaluatedBy==='both'||!req.evaluatedBy));
+        const total=relevantReqs.reduce((a,rq)=>a+rq.points,0);
+        const pct=total>0?Math.round((pts/total)*100):0;
+        return`<button onclick="W.selectFiscalRegion('${r.id}')"
           style="padding:1rem;border:1.5px solid #e2e8f0;border-radius:1rem;text-align:left;background:#fff;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.06);">
           <div style="font-size:.7rem;color:#94a3b8;margin-bottom:.2rem;">${r.id}</div>
           <div style="font-weight:700;color:#1e293b;font-size:.9rem;">${r.name}</div>
           <div style="font-size:.75rem;color:#7c3aed;font-weight:600;margin-top:.375rem;">${pts} / ${total} pts</div>
+          <div style="background:#e2e8f0;border-radius:999px;height:.3rem;margin-top:.375rem;">
+            <div style="background:#7c3aed;border-radius:999px;height:.3rem;width:${pct}%;"></div>
+          </div>
         </button>`;
       }).join('')}
     </div>
   </div>`;
 }
-function vJudgeScore(){
-  const reg=REGIONS.find(r=>r.id===S.judgeRegionId);
+
+function vFiscalScore(){
+  const reg=REGIONS.find(r=>r.id===S.fiscalRegionId);
   const cat=S.currentUser.judgeCategory;
-  const reqs=S.requirements.filter(r=>r.category===cat&&r.active!==false);
-  const existingScores={};
-  S.submissions.filter(s=>s.regionId===S.judgeRegionId&&s.source==='judge').forEach(s=>{existingScores[s.requirementId]=s;});
+  const reqs=S.requirements.filter(r=>r.active!==false
+    &&(!cat||r.category===cat)
+    &&(r.evaluatedBy==='fiscal'||r.evaluatedBy==='both'||!r.evaluatedBy));
+  const existingMap={};
+  S.submissions.filter(s=>s.regionId===S.fiscalRegionId&&s.source==='judge')
+    .forEach(s=>{existingMap[s.requirementId]=s;});
+
   return`
   <div style="min-height:100dvh;background:#f5f3ff;">
     <div style="background:linear-gradient(135deg,#4c1d95,#7c3aed);color:#fff;padding:1rem 1rem 1.5rem;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;">
         <div>
-          <button onclick="W.selectJudgeRegion(null)" style="background:none;border:none;color:#ddd6fe;cursor:pointer;font-size:.85rem;display:block;margin-bottom:.25rem;">← Regiões</button>
+          <button onclick="W.selectFiscalRegion(null)" style="background:none;border:none;color:#ddd6fe;cursor:pointer;font-size:.85rem;display:block;margin-bottom:.25rem;">← Regiões</button>
           <h1 style="font-size:1.25rem;font-weight:800;margin:0;">⚖️ ${reg?.name}</h1>
-          <p style="color:#ddd6fe;font-size:.82rem;margin:.25rem 0 0;">Categoria: ${cat}</p>
+          <p style="color:#ddd6fe;font-size:.82rem;margin:.25rem 0 0;">${cat?`Categoria: ${cat}`:'Fiscal de Prova'}</p>
         </div>
         <button onclick="W.logout()" style="background:rgba(0,0,0,.2);border:none;color:#fff;padding:.4rem .875rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">Sair</button>
       </div>
@@ -554,11 +605,55 @@ function vJudgeScore(){
     <div style="padding:1rem;display:flex;flex-direction:column;gap:.75rem;padding-bottom:5rem;">
       ${reqs.length===0?`<div style="text-align:center;padding:4rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">📋</div><p style="font-weight:600;">Nenhum requisito nesta categoria</p></div>`
       :reqs.map(req=>{
-        const ex=existingScores[req.id];
+        const ex=existingMap[req.id];
+        const hasSubItems=req.subItems?.length>0;
+        const curScores=S.fiscalScores[req.id]||{};
+
+        if(hasSubItems){
+          const subItems=req.subItems;
+          let calcTotal=0;
+          const rows=subItems.map(si=>{
+            // prioridade: seleção atual > seleção anterior salva
+            const selPct=curScores[si.id]!==undefined?curScores[si.id]
+              :(ex?.subItemPcts?.[si.id]!==undefined?ex.subItemPcts[si.id]:null);
+            const earned=selPct!==null?Math.round(si.points*selPct/100):0;
+            if(selPct!==null)calcTotal+=earned;
+            return`<div style="background:#f8fafc;border-radius:.75rem;padding:.75rem;margin-bottom:.5rem;">
+              <div style="font-size:.85rem;font-weight:600;color:#1e293b;margin-bottom:.375rem;">
+                ${si.name} <span style="color:#7c3aed;font-weight:700;">(máx ${si.points} pts)</span>
+              </div>
+              <div style="display:flex;gap:.375rem;flex-wrap:wrap;">
+                ${SCORE_PCTS.map(pct=>`<button class="pct-btn ${selPct===pct?'sel':''}"
+                  onclick="W.selectSubPct('${req.id}','${si.id}',${pct})">
+                  ${pct}%${pct>0?` ·&nbsp;${Math.round(si.points*pct/100)}pts`:''}
+                </button>`).join('')}
+              </div>
+              ${selPct!==null?`<div style="font-size:.75rem;color:#7c3aed;font-weight:700;margin-top:.375rem;">→ ${earned} pts atribuídos</div>`:''}
+            </div>`;
+          });
+          return`<div style="background:#fff;border-radius:1rem;border:1px solid ${ex?'#a78bfa':'#e2e8f0'};border-left:4px solid ${ex?'#7c3aed':'#e2e8f0'};padding:1rem;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+            <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem;">
+              <span style="background:#ede9fe;color:#6d28d9;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts máx</span>
+              ${ex?`<span class="badge-fiscal">⚖️ Pontuado: ${ex.requirementPoints} pts</span>`:''}
+            </div>
+            <div style="font-weight:700;color:#1e293b;font-size:.95rem;margin-bottom:.75rem;">${req.name}</div>
+            ${req.description?`<div style="font-size:.8rem;color:#64748b;margin-bottom:.75rem;">${req.description}</div>`:''}
+            ${rows.join('')}
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin-top:.25rem;">
+              <div style="font-size:.9rem;font-weight:700;color:#1e293b;">Total: <span style="color:#7c3aed;">${calcTotal} / ${req.points} pts</span></div>
+              <button onclick="W.submitFiscalSubItems('${req.id}','${S.fiscalRegionId}')"
+                style="background:#7c3aed;color:#fff;border:none;padding:.625rem 1.25rem;border-radius:.75rem;font-size:.9rem;font-weight:700;cursor:pointer;">
+                ${ex?'🔄 Atualizar':'✅ Confirmar'}
+              </button>
+            </div>
+          </div>`;
+        }
+
+        // requisito sem sub-itens: entrada numérica
         return`<div style="background:#fff;border-radius:1rem;border:1px solid ${ex?'#a78bfa':'#e2e8f0'};border-left:4px solid ${ex?'#7c3aed':'#e2e8f0'};padding:1rem;box-shadow:0 1px 3px rgba(0,0,0,.06);">
           <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem;">
             <span style="background:#ede9fe;color:#6d28d9;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts máx</span>
-            ${ex?`<span class="badge-judge">⚖️ Pontuado: ${ex.requirementPoints} pts</span>`:''}
+            ${ex?`<span class="badge-fiscal">⚖️ Pontuado: ${ex.requirementPoints} pts</span>`:''}
           </div>
           <div style="font-weight:700;color:#1e293b;font-size:.95rem;margin-bottom:.5rem;">${req.name}</div>
           ${req.description?`<div style="font-size:.8rem;color:#64748b;margin-bottom:.75rem;">${req.description}</div>`:''}
@@ -566,7 +661,7 @@ function vJudgeScore(){
             <input type="number" id="pts-${req.id}" value="${ex?.requirementPoints??''}" min="0" max="${req.points}" placeholder="0"
               style="width:80px;border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.5rem;font-size:1rem;text-align:center;outline:none;font-weight:700;">
             <span style="font-size:.85rem;color:#64748b;">/ ${req.points} pts</span>
-            <button onclick="W.submitJudgeScore('${req.id}','${S.judgeRegionId}')"
+            <button onclick="W.submitFiscalScore('${req.id}','${S.fiscalRegionId}')"
               style="flex:1;min-width:120px;background:#7c3aed;color:#fff;border:none;padding:.625rem 1rem;border-radius:.75rem;font-size:.9rem;font-weight:700;cursor:pointer;">
               ${ex?'🔄 Atualizar':'✅ Confirmar'}
             </button>
@@ -582,12 +677,12 @@ function vAdmin(){
   const role=S.currentUser?.role;
   const isSuperAdmin=role==='superadmin';
   const isAdmin=role==='superadmin'||role==='admin';
-  const canManageReqs=isAdmin; // superadmin e admin podem gerenciar requisitos
   const pendingCount=S.submissions.filter(s=>s.status==='pending'&&s.source!=='judge').length;
   const tabs=[
     {id:'queue',label:'📋 Fila',count:pendingCount},
-    ...(canManageReqs?[{id:'requirements',label:'⚙️ Requisitos'}]:[]),
+    ...(isAdmin?[{id:'requirements',label:'⚙️ Requisitos'}]:[]),
     {id:'history',label:'📂 Histórico'},
+    ...(isAdmin?[{id:'dashboard',label:'📊 Dashboard'}]:[]),
     ...(isSuperAdmin?[{id:'users',label:'👥 Usuários'}]:[]),
   ];
   return`
@@ -598,18 +693,22 @@ function vAdmin(){
           <div style="font-size:.78rem;color:#bbf7d0;margin-bottom:.2rem;">👤 ${S.currentUser.name} · ${ROLES[S.currentUser.role]||S.currentUser.role}</div>
           <h1 style="font-size:1.25rem;font-weight:800;margin:0;">Painel ADM</h1>
         </div>
-        <button onclick="W.logout()" style="background:rgba(0,0,0,.2);border:none;color:#fff;padding:.5rem 1rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">Sair</button>
+        <div style="display:flex;gap:.5rem;align-items:center;">
+          <button onclick="W.openChangePwd()" style="background:rgba(0,0,0,.15);border:none;color:#bbf7d0;padding:.4rem .75rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔑</button>
+          <button onclick="W.logout()" style="background:rgba(0,0,0,.2);border:none;color:#fff;padding:.5rem 1rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">Sair</button>
+        </div>
       </div>
     </div>
-    <div style="background:#fff;border-bottom:1px solid #f1f5f9;display:flex;">
+    <div style="background:#fff;border-bottom:1px solid #f1f5f9;display:flex;overflow-x:auto;">
       ${tabs.map(t=>`<button class="tab-btn ${S.adminTab===t.id?'active':''}" onclick="W.setTab('${t.id}')">
         ${t.label}${t.count?`<span style="background:#ef4444;color:#fff;font-size:.65rem;font-weight:700;padding:.1rem .4rem;border-radius:999px;margin-left:.25rem;">${t.count}</span>`:''}
       </button>`).join('')}
     </div>
     <div style="padding:1rem;padding-bottom:5rem;">
       ${S.adminTab==='queue'?tQueue():''}
-      ${S.adminTab==='requirements'&&canManageReqs?tReqs():''}
+      ${S.adminTab==='requirements'&&isAdmin?tReqs():''}
       ${S.adminTab==='history'?tHistory():''}
+      ${S.adminTab==='dashboard'&&isAdmin?tDashboard():''}
       ${S.adminTab==='users'&&isSuperAdmin?tUsers():''}
     </div>
   </div>`;
@@ -617,11 +716,11 @@ function vAdmin(){
 
 function tQueue(){
   const pending=S.submissions.filter(s=>s.status==='pending'&&s.source!=='judge');
-  if(!pending.length)return`<div style="text-align:center;padding:4rem 1rem;color:#94a3b8;"><div style="font-size:3.5rem;">🎉</div><p style="font-weight:700;font-size:1.05rem;">Nenhuma comprovação pendente!</p></div>`;
+  if(!pending.length)return`<div style="text-align:center;padding:4rem 1rem;color:#94a3b8;"><div style="font-size:3.5rem;">🎉</div><p style="font-weight:700;font-size:1.05rem;">Fila limpa!</p><p style="font-size:.85rem;">Nenhuma comprovação pendente</p></div>`;
   return`<p style="font-size:.8rem;color:#94a3b8;margin-bottom:.875rem;">${pending.length} aguardando revisão</p>
   <div style="display:flex;flex-direction:column;gap:.875rem;">
     ${pending.map(sub=>`
-    <div style="background:#fff;border-radius:1.125rem;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06);">
+    <div class="card">
       ${proofBlock(sub.proofUrl,'queue')}
       <div style="padding:1rem;">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;margin-bottom:.875rem;">
@@ -650,13 +749,16 @@ function tReqs(){
   ${S.requirements.length===0?`<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">📝</div><p style="font-weight:600;">Nenhum requisito cadastrado</p></div>`
   :`<div style="display:flex;flex-direction:column;gap:.625rem;">
     ${S.requirements.map(req=>`
-    <div style="background:#fff;border-radius:1rem;border:1px solid #e2e8f0;padding:1rem;box-shadow:0 1px 3px rgba(0,0,0,.04);">
+    <div class="card" style="padding:1rem;overflow:visible;">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;">
         <div style="flex:1;">
           <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
             <span style="background:#f1f5f9;color:#475569;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.category}</span>
             <span style="background:#dbeafe;color:#1d4ed8;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts</span>
             ${req.phase?`<span style="background:#f0fdf4;color:#166534;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.phase}</span>`:''}
+            ${req.competitionCategory&&req.competitionCategory!=='Ambos'?`<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.competitionCategory}</span>`:''}
+            ${req.evaluatedBy&&req.evaluatedBy!=='both'?`<span class="badge-fiscal">${req.evaluatedBy==='fiscal'?'⚖️ Só Fiscal':'📍 Só Região'}</span>`:''}
+            ${req.subItems?.length?`<span style="background:#f5f3ff;color:#6d28d9;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">📊 ${req.subItems.length} sub</span>`:''}
             ${req.active===false?`<span style="background:#fee2e2;color:#dc2626;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">Inativo</span>`:''}
           </div>
           <div style="font-weight:700;color:#1e293b;font-size:.9rem;">${req.name}</div>
@@ -692,7 +794,7 @@ function tHistory(){
     ${filtered.length===0?`<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">📂</div><p>Nenhum registro</p></div>`
     :`<div style="display:flex;flex-direction:column;gap:.625rem;">
       ${filtered.map(sub=>`
-      <div style="background:#fff;border-radius:1rem;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.04);">
+      <div class="card">
         ${proofBlock(sub.proofUrl,'history')}
         <div style="padding:.875rem;">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;margin-bottom:.625rem;">
@@ -704,7 +806,7 @@ function tHistory(){
             </div>
             <div style="display:flex;flex-direction:column;align-items:flex-end;gap:.25rem;flex-shrink:0;">
               ${badge(sub.status,sub.source)}
-              ${sub.source==='judge'?'<span style="font-size:.65rem;color:#7c3aed;">via Juiz</span>':''}
+              ${sub.source==='judge'?'<span style="font-size:.65rem;color:#7c3aed;">via Fiscal</span>':''}
             </div>
           </div>
           ${sub.rejectionReason?`<div style="font-size:.78rem;color:#dc2626;margin-bottom:.5rem;background:#fff1f1;padding:.375rem .625rem;border-radius:.5rem;">Motivo: ${sub.rejectionReason}</div>`:''}
@@ -713,6 +815,80 @@ function tHistory(){
         </div>
       </div>`).join('')}
     </div>`}
+  </div>`;
+}
+
+function tDashboard(){
+  const scores=computeScores();
+  const totalSubs=S.submissions.length;
+  const approved=S.submissions.filter(s=>s.status==='approved').length;
+  const pending=S.submissions.filter(s=>s.status==='pending').length;
+  const rejected=S.submissions.filter(s=>s.status==='rejected').length;
+  const totalPts=scores.reduce((a,s)=>a+s.total,0);
+  const maxPts=scores[0]?.total||1;
+  const ptsByCat={};
+  S.submissions.filter(s=>s.status==='approved').forEach(s=>{
+    const c=s.requirementCategory||'Outros';
+    ptsByCat[c]=(ptsByCat[c]||0)+(s.requirementPoints||0);
+  });
+  const catMax=Math.max(...Object.values(ptsByCat),1);
+  return`<div style="display:flex;flex-direction:column;gap:1rem;">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.625rem;">
+      <div class="card" style="padding:.875rem;text-align:center;overflow:visible;">
+        <div style="font-size:1.75rem;font-weight:800;color:#16a34a;">${approved}</div>
+        <div style="font-size:.75rem;color:#64748b;margin-top:.2rem;">Aprovadas</div>
+      </div>
+      <div class="card" style="padding:.875rem;text-align:center;overflow:visible;">
+        <div style="font-size:1.75rem;font-weight:800;color:#f59e0b;">${pending}</div>
+        <div style="font-size:.75rem;color:#64748b;margin-top:.2rem;">Pendentes</div>
+      </div>
+      <div class="card" style="padding:.875rem;text-align:center;overflow:visible;">
+        <div style="font-size:1.75rem;font-weight:800;color:#dc2626;">${rejected}</div>
+        <div style="font-size:.75rem;color:#64748b;margin-top:.2rem;">Rejeitadas</div>
+      </div>
+      <div class="card" style="padding:.875rem;text-align:center;overflow:visible;">
+        <div style="font-size:1.75rem;font-weight:800;color:#1d4ed8;">${totalPts}</div>
+        <div style="font-size:.75rem;color:#64748b;margin-top:.2rem;">Pts Totais</div>
+      </div>
+    </div>
+    ${totalSubs>0?`<div class="card" style="padding:1rem;overflow:visible;">
+      <div style="font-weight:700;color:#1e293b;margin-bottom:.75rem;font-size:.9rem;">Taxa de Aprovação</div>
+      <div style="background:#e2e8f0;border-radius:999px;height:.75rem;overflow:hidden;">
+        <div style="background:#16a34a;height:.75rem;width:${Math.round(approved/totalSubs*100)}%;border-radius:999px;"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:.75rem;color:#64748b;margin-top:.375rem;">
+        <span>${Math.round(approved/totalSubs*100)}% aprovadas</span>
+        <span>${totalSubs} total</span>
+      </div>
+    </div>`:''}
+    <div class="card" style="padding:1rem;overflow:visible;">
+      <div style="font-weight:700;color:#1e293b;margin-bottom:.875rem;font-size:.9rem;">🏆 Ranking por Região</div>
+      <div style="display:flex;flex-direction:column;gap:.5rem;">
+        ${scores.slice(0,10).map((s,i)=>`<div>
+          <div style="display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:.2rem;">
+            <span style="font-weight:600;color:#374151;">${i+1}. ${s.name}</span>
+            <span style="font-weight:700;color:#1d4ed8;">${s.total} pts</span>
+          </div>
+          <div style="background:#e2e8f0;border-radius:999px;height:.4rem;">
+            <div style="background:${i===0?'#ca8a04':i===1?'#9ca3af':i===2?'#92400e':'#3b82f6'};border-radius:999px;height:.4rem;width:${Math.round(s.total/maxPts*100)}%;"></div>
+          </div>
+        </div>`).join('')}
+      </div>
+    </div>
+    ${Object.keys(ptsByCat).length>0?`<div class="card" style="padding:1rem;overflow:visible;">
+      <div style="font-weight:700;color:#1e293b;margin-bottom:.875rem;font-size:.9rem;">📊 Pontos por Categoria</div>
+      <div style="display:flex;flex-direction:column;gap:.5rem;">
+        ${Object.entries(ptsByCat).sort((a,b)=>b[1]-a[1]).map(([cat,pts])=>`<div>
+          <div style="display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:.2rem;">
+            <span style="color:#374151;">${cat}</span>
+            <span style="font-weight:700;color:#166534;">${pts} pts</span>
+          </div>
+          <div style="background:#e2e8f0;border-radius:999px;height:.4rem;">
+            <div style="background:#16a34a;border-radius:999px;height:.4rem;width:${Math.round(pts/catMax*100)}%;"></div>
+          </div>
+        </div>`).join('')}
+      </div>
+    </div>`:''}
   </div>`;
 }
 
@@ -725,7 +901,7 @@ function tUsers(){
     ${S.users.length===0?`<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">👥</div><p>Nenhum usuário</p></div>`
     :`<div style="display:flex;flex-direction:column;gap:.625rem;">
       ${S.users.sort((a,b)=>a.name.localeCompare(b.name)).map(u=>`
-      <div style="background:#fff;border-radius:1rem;border:1px solid ${u.active===false?'#fee2e2':'#e2e8f0'};padding:1rem;box-shadow:0 1px 3px rgba(0,0,0,.04);">
+      <div class="card" style="padding:1rem;overflow:visible;border:1px solid ${u.active===false?'#fee2e2':'#e2e8f0'};">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;">
           <div style="flex:1;">
             <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
@@ -734,6 +910,7 @@ function tUsers(){
                 font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${ROLES[u.role]||u.role}</span>
               ${u.active===false?`<span style="background:#fee2e2;color:#dc2626;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">Inativo</span>`:''}
               ${u.regionId?`<span style="background:#f1f5f9;color:#475569;font-size:.7rem;padding:.2rem .6rem;border-radius:999px;">${rname(u.regionId)}</span>`:''}
+              ${u.competitionCategory?`<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${u.competitionCategory}</span>`:''}
               ${u.judgeCategory?`<span style="background:#f5f3ff;color:#6d28d9;font-size:.7rem;padding:.2rem .6rem;border-radius:999px;">${u.judgeCategory}</span>`:''}
             </div>
             <div style="font-weight:700;color:#1e293b;">${u.name}</div>
@@ -752,36 +929,67 @@ function tUsers(){
   </div>`;
 }
 
-// ── MODAL: REQ FORM ────────────────────────────────────────────
+// ── MODAL: REQUISITO ──────────────────────────────────────────
 function mReqForm(){
-  const r=S.editingReq;
-  const isEdit=!!r?.id;
-  const inp=(id,val,ph,type='text')=>`<input id="${id}" type="${type}" value="${val||''}" placeholder="${ph}"
-    style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;font-family:inherit;">`;
-  const sel=(id,opts,cur)=>`<select id="${id}" style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
-    ${opts.map(o=>`<option value="${o}" ${cur===o?'selected':''}>${o}</option>`).join('')}</select>`;
+  const r=S.editingReq||{};
+  const isEdit=!!r.id;
+  const subItems=r.subItems||[];
+  const subTotal=subItems.reduce((a,si)=>a+Number(si.points||0),0);
+  const hasSubItems=subItems.length>0;
   const lbl=t=>`<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
+  const sel=(id,opts,cur)=>`<select id="${id}" style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
+    ${opts.map(o=>typeof o==='string'
+      ?`<option value="${o}" ${cur===o?'selected':''}>${o}</option>`
+      :`<option value="${o.v}" ${cur===o.v?'selected':''}>${o.l}</option>`).join('')}
+  </select>`;
   return`
   <div class="modal-overlay" onclick="if(event.target===this)W.closeModal()">
     <div class="modal-content">
       <div style="width:2.5rem;height:.25rem;background:#e2e8f0;border-radius:999px;margin:0 auto .875rem;"></div>
       <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">${isEdit?'Editar':'Novo'} Requisito</h2>
       <div style="display:flex;flex-direction:column;gap:.875rem;">
-        <div>${lbl('Nome *')}${inp('rq-name',r?.name,'Ex: Planejamento Anual')}</div>
-        <div>${lbl('Código da pasta (sem espaços)')}<input id="rq-code" type="text" value="${r?.code||''}" placeholder="ex: planejamento-anual"
+        <div>${lbl('Nome *')}<input id="rq-name" type="text" value="${r.name||''}" placeholder="Ex: Planejamento Anual"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Código da pasta')}<input id="rq-code" type="text" value="${r.code||''}" placeholder="ex: planejamento-anual"
           style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"
-          oninput="this.value=this.value.toLowerCase().replace(/[^a-z0-9-_]/g,'-')">
-          <div style="font-size:.75rem;color:#94a3b8;margin-top:.25rem;">Usado para organizar os arquivos: uploads/<strong>${r?.code||'código'}</strong>/região/</div>
-        </div>
+          oninput="this.value=this.value.toLowerCase().replace(/[^a-z0-9-_]/g,'-')"></div>
         <div>${lbl('Descrição')}<textarea id="rq-desc" rows="2" placeholder="Orientações..."
-          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;resize:none;outline:none;font-family:inherit;">${r?.description||''}</textarea></div>
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;resize:none;outline:none;font-family:inherit;">${r.description||''}</textarea></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;">
-          <div>${lbl('Categoria *')}${sel('rq-cat',CATEGORIES,r?.category)}</div>
-          <div>${lbl('Fase *')}${sel('rq-phase',PHASES,r?.phase)}</div>
+          <div>${lbl('Categoria *')}${sel('rq-cat',CATEGORIES,r.category||CATEGORIES[0])}</div>
+          <div>${lbl('Fase *')}${sel('rq-phase',PHASES,r.phase||PHASES[0])}</div>
         </div>
-        <div>${lbl('Pontuação *')}${inp('rq-pts',r?.points,'Ex: 50','number')}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;">
+          <div>${lbl('Modalidade')}${sel('rq-compcat',COMP_CATS,r.competitionCategory||'Ambos')}</div>
+          <div>${lbl('Avaliado por')}${sel('rq-evalby',[{v:'both',l:'Fiscal e Região'},{v:'fiscal',l:'Só Fiscal'},{v:'region',l:'Só Região'}],r.evaluatedBy||'both')}</div>
+        </div>
+        <div style="border:1.5px solid #e2e8f0;border-radius:.875rem;padding:1rem;background:#fafafa;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;">
+            <div>
+              <div style="font-size:.85rem;font-weight:700;color:#374151;">📊 Sub-itens (opcional)</div>
+              <div style="font-size:.72rem;color:#94a3b8;">Fiscal avalia cada sub-item em % (0/30/50/70/100)</div>
+            </div>
+            <button onclick="W.addSubItem()" style="background:#7c3aed;color:#fff;border:none;padding:.375rem .75rem;border-radius:.625rem;font-size:.8rem;font-weight:700;cursor:pointer;">+ Add</button>
+          </div>
+          <div id="subitems-list">
+            ${subItems.map((si,i)=>`<div class="sub-item-row" data-id="${si.id||''}" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
+              <input class="si-name" type="text" value="${si.name||''}" placeholder="Nome do sub-item"
+                style="flex:1;border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.625rem;font-size:.85rem;outline:none;">
+              <input class="si-pts" type="number" value="${si.points||0}" min="0" placeholder="pts"
+                style="width:70px;border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.625rem;font-size:.85rem;outline:none;text-align:center;">
+              <button onclick="W.removeSubItem(${i})" style="background:#fef2f2;border:none;color:#ef4444;padding:.5rem;border-radius:.5rem;cursor:pointer;flex-shrink:0;">🗑️</button>
+            </div>`).join('')}
+          </div>
+          ${hasSubItems?`<div style="text-align:right;font-size:.82rem;color:#7c3aed;font-weight:700;">Total: ${subTotal} pts</div>`
+            :`<div style="font-size:.75rem;color:#94a3b8;text-align:center;">Sem sub-itens — use o campo Pontuação abaixo</div>`}
+        </div>
+        <div>${lbl(hasSubItems?'Pontuação (soma dos sub-itens)':'Pontuação *')}
+          <input id="rq-pts" type="number" value="${hasSubItems?subTotal:(r.points||'')}" placeholder="Ex: 50"
+            ${hasSubItems?'readonly':''}
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;${hasSubItems?'background:#f8fafc;':''}">
+        </div>
         ${isEdit?`<div style="display:flex;align-items:center;gap:.75rem;">
-          <input type="checkbox" id="rq-active" ${r?.active!==false?'checked':''} style="width:1.1rem;height:1.1rem;">
+          <input type="checkbox" id="rq-active" ${r.active!==false?'checked':''} style="width:1.1rem;height:1.1rem;">
           <label for="rq-active" style="font-size:.9rem;font-weight:600;color:#374151;">Requisito ativo</label>
         </div>`:''}
         <button onclick="W.saveReq()" ${S.loading?'disabled':''}
@@ -794,7 +1002,7 @@ function mReqForm(){
   </div>`;
 }
 
-// ── MODAL: USER FORM ───────────────────────────────────────────
+// ── MODAL: USUÁRIO ────────────────────────────────────────────
 function mUserForm(){
   const u=S.editingUser;
   const isEdit=!!u?.id;
@@ -817,11 +1025,18 @@ function mUserForm(){
           style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
           ${Object.entries(ROLES).map(([k,v])=>`<option value="${k}" ${formRole===k?'selected':''}>${v}</option>`).join('')}
         </select></div>
-        ${formRole==='region'?`<div>${lbl('Região *')}<select id="u-region"
-          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
-          <option value="">Selecione...</option>
-          ${REGIONS.map(r=>`<option value="${r.id}" ${u?.regionId===r.id?'selected':''}>${r.name}</option>`).join('')}
-        </select></div>`:''}
+        ${formRole==='region'?`
+          <div>${lbl('Região *')}<select id="u-region"
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
+            <option value="">Selecione...</option>
+            ${REGIONS.map(r=>`<option value="${r.id}" ${u?.regionId===r.id?'selected':''}>${r.name}</option>`).join('')}
+          </select></div>
+          <div>${lbl('Modalidade *')}<select id="u-compcat"
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
+            <option value="">Selecione...</option>
+            <option value="DBV" ${u?.competitionCategory==='DBV'?'selected':''}>DBV</option>
+            <option value="AVT" ${u?.competitionCategory==='AVT'?'selected':''}>AVT</option>
+          </select></div>`:''}
         ${formRole==='judge'?`<div>${lbl('Categoria *')}<select id="u-cat"
           style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
           <option value="">Selecione...</option>
@@ -860,19 +1075,59 @@ function mPhoto(){
   </div>`;
 }
 
+// ── MODAL: TROCAR SENHA ───────────────────────────────────────
+function mChangePassword(){
+  return`
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:360px;">
+      <h2 style="font-size:1.1rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">🔑 Trocar Senha</h2>
+      <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>
+          <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">Senha Atual</label>
+          <input type="password" id="pwd-current" placeholder="••••••••"
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:1rem;outline:none;">
+        </div>
+        <div>
+          <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">Nova Senha</label>
+          <input type="password" id="pwd-new" placeholder="••••••••"
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:1rem;outline:none;">
+        </div>
+        <div>
+          <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">Confirmar Nova Senha</label>
+          <input type="password" id="pwd-confirm" placeholder="••••••••"
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:1rem;outline:none;"
+            onkeydown="if(event.key==='Enter')W.doChangePassword()">
+        </div>
+        <button onclick="W.doChangePassword()" ${S.loading?'disabled':''}
+          style="width:100%;background:#1e3a8a;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading?.6:1};">
+          ${S.loading?'⏳ Salvando...':'Salvar Nova Senha'}
+        </button>
+      </div>
+      <button onclick="W.closeModal()" style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
 // ── VIEW: RANKING ─────────────────────────────────────────────
 function vRanking(){
-  const scores=computeScores();
+  const catFilter=S.rankingCat||'Todos';
+  const scores=computeScores(catFilter);
   const max=scores[0]?.total||1;
-  const top3=scores.slice(0,3);
+  const top3=scores.filter(s=>s.total>0).slice(0,3);
+  const backLabel=S.currentUser?.role==='region'?'Portal':S.currentUser?'Painel':'Início';
   return`
   <div style="min-height:100dvh;background:linear-gradient(160deg,#1e3a8a 0%,#1d4ed8 55%,#2563eb 100%);">
     <div style="max-width:500px;margin:0 auto;">
       <div style="padding:1.5rem;text-align:center;position:relative;">
-        <button onclick="W.nav('home')" style="position:absolute;top:1.25rem;left:1rem;background:none;border:none;color:#93c5fd;font-size:.85rem;cursor:pointer;">← Início</button>
+        <button onclick="W.navFromRanking()" style="position:absolute;top:1.25rem;left:1rem;background:none;border:none;color:#93c5fd;font-size:.85rem;cursor:pointer;">← ${backLabel}</button>
         <div style="font-size:3.5rem;margin-bottom:.5rem;">🏆</div>
         <h1 style="font-size:1.6rem;font-weight:800;color:#fff;margin:0;">Ranking Geral</h1>
-        <p style="color:#93c5fd;font-size:.85rem;margin:.25rem 0 0;">Campori de Líderes APV</p>
+        <p style="color:#93c5fd;font-size:.85rem;margin:.25rem 0 .875rem;">Campori de Líderes APV</p>
+        <div style="display:inline-flex;gap:.375rem;background:rgba(0,0,0,.2);border-radius:999px;padding:.25rem;">
+          ${['Todos','DBV','AVT'].map(c=>`<button onclick="W.setRankingCat('${c}')"
+            style="padding:.375rem .875rem;border-radius:999px;border:none;font-size:.8rem;font-weight:700;cursor:pointer;
+            background:${catFilter===c?'#fff':'transparent'};color:${catFilter===c?'#1e3a8a':'rgba(255,255,255,.7)'};">${c}</button>`).join('')}
+        </div>
       </div>
       ${top3.length>=3?`<div style="padding:0 1rem 1.5rem;display:flex;align-items:flex-end;gap:.75rem;">
         <div style="flex:1;text-align:center;"><div style="font-size:1.75rem;margin-bottom:.375rem;">🥈</div>
@@ -896,15 +1151,16 @@ function vRanking(){
       </div>`:''}
       <div style="background:#fff;border-radius:1.5rem 1.5rem 0 0;padding:1.25rem;min-height:50dvh;">
         <div style="display:flex;flex-direction:column;gap:.5rem;padding-bottom:3rem;">
+          ${scores.length===0?`<div style="text-align:center;padding:3rem;color:#94a3b8;"><p>Nenhuma pontuação ainda</p></div>`:''}
           ${scores.map((s,i)=>`
-          <div style="display:flex;align-items:center;gap:.875rem;padding:.875rem;border-radius:.875rem;background:${i<3?'#eff6ff':'#f8fafc'};">
-            <div style="width:2rem;text-align:center;font-weight:800;font-size:.9rem;flex-shrink:0;color:${i===0?'#ca8a04':i===1?'#6b7280':i===2?'#92400e':'#94a3b8'};">
-              ${i===0?'🥇':i===1?'🥈':i===2?'🥉':`${i+1}º`}
+          <div style="display:flex;align-items:center;gap:.875rem;padding:.875rem;border-radius:.875rem;background:${i<3&&s.total>0?'#eff6ff':'#f8fafc'};">
+            <div style="width:2rem;text-align:center;font-weight:800;font-size:.9rem;flex-shrink:0;color:${i===0&&s.total>0?'#ca8a04':i===1&&s.total>0?'#6b7280':i===2&&s.total>0?'#92400e':'#94a3b8'};">
+              ${i===0&&s.total>0?'🥇':i===1&&s.total>0?'🥈':i===2&&s.total>0?'🥉':`${i+1}º`}
             </div>
             <div style="flex:1;">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem;">
                 <span style="font-weight:700;color:#1e293b;font-size:.9rem;">${s.name}</span>
-                <span style="font-weight:800;color:#1d4ed8;font-size:.9rem;">${s.total} pts</span>
+                <span style="font-weight:800;color:${s.total>0?'#1d4ed8':'#94a3b8'};font-size:.9rem;">${s.total} pts</span>
               </div>
               <div style="background:#e2e8f0;border-radius:999px;height:.4rem;">
                 <div style="background:#1d4ed8;border-radius:999px;height:.4rem;width:${Math.round((s.total/max)*100)}%;"></div>
@@ -921,16 +1177,18 @@ function vRanking(){
 // ── RENDER ────────────────────────────────────────────────────
 function render(){
   let html='';
-  if(S.view==='home')html=vHome();
-  else if(S.view==='login')html=vLogin();
-  else if(S.view==='portal')html=vPortal();
-  else if(S.view==='admin')html=vAdmin();
-  else if(S.view==='judge')html=vJudge();
-  else if(S.view==='ranking')html=vRanking();
+  const v=S.view;
+  if(v==='home')html=vHome();
+  else if(v==='login')html=vLogin();
+  else if(v==='portal')html=vPortal();
+  else if(v==='admin')html=vAdmin();
+  else if(v==='fiscal'||v==='judge')html=vFiscal();
+  else if(v==='ranking')html=vRanking();
   if(S.modal==='submit')html+=mSubmit();
   else if(S.modal==='req-form')html+=mReqForm();
   else if(S.modal==='user-form')html+=mUserForm();
   else if(S.modal==='photo')html+=mPhoto();
+  else if(S.modal==='change-password')html+=mChangePassword();
   app.innerHTML=html;
 }
 
@@ -941,6 +1199,25 @@ window.W={
     if(view==='ranking')subSubs(null);
     render();
   },
+
+  // ranking do portal não destrói a subscription da região
+  navFromPortal(view){
+    if(view==='ranking'){subSubs(null);S.view='ranking';S.modal=null;render();}
+    else W.nav(view);
+  },
+
+  // voltar do ranking para a view correta + restaurar subscription
+  navFromRanking(){
+    S.modal=null;
+    const role=S.currentUser?.role;
+    if(role==='region'){subSubs(S.currentUser.regionId);S.view='portal';}
+    else if(role==='judge'){S.view='fiscal';}
+    else if(['superadmin','admin','approver'].includes(role)){S.view='admin';}
+    else{S.view='home';}
+    render();
+  },
+
+  setRankingCat(cat){S.rankingCat=cat;render();},
   closeModal(){S.modal=null;render();},
 
   async doLogin(){
@@ -954,13 +1231,12 @@ window.W={
       sessionStorage.setItem('campori_user',JSON.stringify(user));
       S.loading=false;S.modal=null;S.firstRunPwd=null;
       if(['superadmin','admin','approver'].includes(user.role)){
-        subSubs(null);subReqs();
-        if(user.role==='superadmin')subUsers();
+        subSubs(null);subReqs();subUsers();
         S.view='admin';S.adminTab='queue';
       }else if(user.role==='judge'){
-        S.judgeRegionId=null;subSubs(null);subReqs();S.view='judge';
+        S.fiscalRegionId=null;subSubs(null);subReqs();subUsers();S.view='fiscal';
       }else if(user.role==='region'){
-        subSubs(user.regionId);subReqs();S.view='portal';
+        subSubs(user.regionId);subReqs();subUsers();S.view='portal';
       }
       render();
     }catch(e){toast(e.message,'error');S.loading=false;render();}
@@ -971,7 +1247,7 @@ window.W={
     if(_unsubSubs)_unsubSubs();if(_unsubReqs)_unsubReqs();if(_unsubUsers)_unsubUsers();
     _unsubSubs=null;_unsubReqs=null;_unsubUsers=null;
     S.submissions=[];S.requirements=[];S.users=[];
-    S.judgeRegionId=null;S.adminTab='queue';
+    S.fiscalRegionId=null;S.adminTab='queue';S.rankingCat='Todos';
     W.nav('home');
   },
 
@@ -996,19 +1272,60 @@ window.W={
   reject(id){const r=prompt('Motivo da rejeição (opcional):')||'';review(id,'rejected',r);},
   reopen(id){if(confirm('Reverter para pendente?'))review(id,'pending');},
 
-  openReqForm(id){S.editingReq=id?S.requirements.find(r=>r.id===id):{};S.modal='req-form';render();},
+  openReqForm(id){
+    S.editingReq=id?{...S.requirements.find(r=>r.id===id)}:{};
+    S.modal='req-form';render();
+  },
+  addSubItem(){
+    // lê estado atual do DOM antes de re-renderizar
+    const rows=[...document.querySelectorAll('#subitems-list .sub-item-row')];
+    const current=rows.map(row=>({
+      id:row.dataset.id||`si_${Date.now()}_${Math.random().toString(36).slice(2,5)}`,
+      name:row.querySelector('.si-name').value,
+      points:parseInt(row.querySelector('.si-pts').value)||0
+    }));
+    current.push({id:`si_${Date.now()}`,name:'',points:0});
+    S.editingReq={...S.editingReq,subItems:current};
+    render();
+  },
+  removeSubItem(idx){
+    const rows=[...document.querySelectorAll('#subitems-list .sub-item-row')];
+    const current=rows.map(row=>({
+      id:row.dataset.id||'',
+      name:row.querySelector('.si-name').value,
+      points:parseInt(row.querySelector('.si-pts').value)||0
+    }));
+    current.splice(idx,1);
+    S.editingReq={...S.editingReq,subItems:current};
+    render();
+  },
   async saveReq(){
     const name=document.getElementById('rq-name')?.value?.trim();
     const code=document.getElementById('rq-code')?.value?.trim()||name?.toLowerCase().replace(/[^a-z0-9]+/g,'-');
     const desc=document.getElementById('rq-desc')?.value?.trim();
     const cat=document.getElementById('rq-cat')?.value;
     const phase=document.getElementById('rq-phase')?.value;
-    const pts=parseInt(document.getElementById('rq-pts')?.value)||0;
+    const compCat=document.getElementById('rq-compcat')?.value||'Ambos';
+    const evalBy=document.getElementById('rq-evalby')?.value||'both';
     const activeEl=document.getElementById('rq-active');
     const active=activeEl?activeEl.checked:true;
+    const rows=[...document.querySelectorAll('#subitems-list .sub-item-row')];
+    const subItems=rows.map((row,i)=>({
+      id:row.dataset.id||`si_${i}_${Date.now()}`,
+      name:row.querySelector('.si-name').value.trim(),
+      points:parseInt(row.querySelector('.si-pts').value)||0
+    })).filter(si=>si.name);
+    const pts=subItems.length>0
+      ?subItems.reduce((a,si)=>a+si.points,0)
+      :parseInt(document.getElementById('rq-pts')?.value)||0;
     if(!name){toast('Nome é obrigatório','error');return;}
     if(!pts){toast('Pontuação inválida','error');return;}
-    await saveReq({...(S.editingReq?.id?{id:S.editingReq.id}:{}),name,code,description:desc,category:cat,phase,points:pts,active});
+    await saveReq({
+      ...(S.editingReq?.id?{id:S.editingReq.id}:{}),
+      name,code,description:desc||'',category:cat,phase,points:pts,
+      competitionCategory:compCat,evaluatedBy:evalBy,
+      subItems:subItems.length>0?subItems:null,active
+    });
   },
   delReq(id){delReq(id);},
 
@@ -1026,23 +1343,28 @@ window.W={
     const username=document.getElementById('u-username')?.value?.trim().toLowerCase();
     const role=document.getElementById('u-role')?.value;
     const regionId=document.getElementById('u-region')?.value||null;
+    const competitionCategory=document.getElementById('u-compcat')?.value||null;
     const judgeCategory=document.getElementById('u-cat')?.value||null;
     const pwd=document.getElementById('u-pwd')?.value||S.generatedPwd;
     if(!name||!role){toast('Nome e perfil são obrigatórios','error');return;}
     if(!S.editingUser&&!username){toast('Usuário é obrigatório','error');return;}
     if(role==='region'&&!regionId){toast('Selecione uma região','error');return;}
+    if(role==='region'&&!competitionCategory){toast('Selecione a modalidade (DBV/AVT)','error');return;}
     if(role==='judge'&&!judgeCategory){toast('Selecione uma categoria','error');return;}
     S.loading=true;render();
     try{
       if(S.editingUser){
-        await updateDoc(doc(db,'users',S.editingUser.id),{name,phone:phone||'',role,regionId:regionId||null,judgeCategory:judgeCategory||null});
+        await updateDoc(doc(db,'users',S.editingUser.id),{
+          name,phone:phone||'',role,
+          regionId:regionId||null,competitionCategory:competitionCategory||null,judgeCategory:judgeCategory||null
+        });
         toast('Usuário atualizado! ✅');
       }else{
         const snap=await getDocs(query(collection(db,'users'),where('username','==',username)));
         if(!snap.empty){toast('Este usuário já existe','error');S.loading=false;render();return;}
         await addDoc(collection(db,'users'),{
           name,phone:phone||'',username,password:pwd,role,
-          regionId:regionId||null,judgeCategory:judgeCategory||null,
+          regionId:regionId||null,competitionCategory:competitionCategory||null,judgeCategory:judgeCategory||null,
           active:true,createdAt:serverTimestamp(),createdBy:S.currentUser?.username||'system'
         });
         toast(`✅ Usuário criado! Senha: ${pwd}`);
@@ -1059,24 +1381,69 @@ window.W={
 
   exportExcel(){exportExcel();},
 
-  selectJudgeRegion(id){S.judgeRegionId=id;render();},
-  async submitJudgeScore(reqId,regionId){
+  selectFiscalRegion(id){S.fiscalRegionId=id;S.fiscalScores={};render();},
+  selectSubPct(reqId,siId,pct){
+    if(!S.fiscalScores[reqId])S.fiscalScores[reqId]={};
+    S.fiscalScores[reqId][siId]=pct;
+    render();
+  },
+  async submitFiscalSubItems(reqId,regionId){
+    const req=S.requirements.find(r=>r.id===reqId);
+    const subItems=req.subItems||[];
+    const curScores=S.fiscalScores[reqId]||{};
+    const ex=S.submissions.find(s=>s.regionId===regionId&&s.requirementId===reqId&&s.source==='judge');
+    const subItemScores={};
+    const subItemPcts={};
+    let total=0;
+    let allSet=true;
+    for(const si of subItems){
+      const pct=curScores[si.id]!==undefined?curScores[si.id]
+        :(ex?.subItemPcts?.[si.id]!==undefined?ex.subItemPcts[si.id]:undefined);
+      if(pct===undefined){allSet=false;break;}
+      const pts=Math.round(si.points*pct/100);
+      subItemScores[si.id]=pts;
+      subItemPcts[si.id]=pct;
+      total+=pts;
+    }
+    if(!allSet){toast('Avalie todos os sub-itens antes de confirmar','error');return;}
+    await doFiscalScore(reqId,regionId,total,subItemScores,subItemPcts);
+    render();
+  },
+  async submitFiscalScore(reqId,regionId){
     const pts=parseInt(document.getElementById(`pts-${reqId}`)?.value)||0;
     const req=S.requirements.find(r=>r.id===reqId);
     if(pts<0||pts>req.points){toast(`Valor entre 0 e ${req.points}`,'error');return;}
-    await doJudgeScore(reqId,regionId,pts);render();
+    await doFiscalScore(reqId,regionId,pts,null,null);render();
+  },
+
+  openChangePwd(){S.modal='change-password';render();},
+  async doChangePassword(){
+    const current=document.getElementById('pwd-current')?.value;
+    const newPwd=document.getElementById('pwd-new')?.value;
+    const confirm=document.getElementById('pwd-confirm')?.value;
+    if(!current||!newPwd||!confirm){toast('Preencha todos os campos','error');return;}
+    if(S.currentUser.password!==current){toast('Senha atual incorreta','error');return;}
+    if(newPwd.length<4){toast('Mínimo 4 caracteres','error');return;}
+    if(newPwd!==confirm){toast('As senhas não coincidem','error');return;}
+    S.loading=true;render();
+    try{
+      await updateDoc(doc(db,'users',S.currentUser.id),{password:newPwd});
+      S.currentUser={...S.currentUser,password:newPwd};
+      sessionStorage.setItem('campori_user',JSON.stringify(S.currentUser));
+      toast('✅ Senha alterada com sucesso!');
+      S.modal=null;
+    }catch(e){toast('Erro ao alterar senha','error');}
+    S.loading=false;render();
   },
 };
 
 // ── INIT ──────────────────────────────────────────────────────
 (async()=>{
-  // Restaurar sessão
   try{
     const saved=sessionStorage.getItem('campori_user');
     if(saved)S.currentUser=JSON.parse(saved);
   }catch(_){}
 
-  // Primeiro acesso: criar superadmin padrão se não existir
   try{
     const snap=await getDocs(collection(db,'users'));
     if(snap.empty){
@@ -1089,15 +1456,12 @@ window.W={
     }
   }catch(e){console.warn('Init error:',e);}
 
-  // Se já logado, carregar dados e ir para a view correta
   if(S.currentUser&&!S.firstRunPwd){
-    subReqs();
+    subReqs();subUsers();
     if(['superadmin','admin','approver'].includes(S.currentUser.role)){
-      subSubs(null);
-      if(S.currentUser.role==='superadmin')subUsers();
-      S.view='admin';
+      subSubs(null);S.view='admin';
     }else if(S.currentUser.role==='judge'){
-      subSubs(null);S.view='judge';
+      subSubs(null);S.view='fiscal';
     }else if(S.currentUser.role==='region'){
       subSubs(S.currentUser.regionId);S.view='portal';
     }

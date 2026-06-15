@@ -20,3 +20,6 @@ server/uploads/
 
 # Credenciais Google (não commitar chave privada)
 server/credentials.json
+
+# Fly.io
+server/.fly/

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Entrar — Campori de Líderes APV</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="../css/base.css">
+</head>
+<body>
+
+<div id="app">
+  <div style="display:flex;align-items:center;justify-content:center;min-height:100dvh;">
+    <div class="spinner"></div>
+  </div>
+</div>
+
+<script type="module">
+import { guardLogin, saveSession, portalUrlForUser } from '../js/auth.js';
+import { loginUser, ensureInitialAdmin, toast } from '../js/api.js';
+
+const app = document.getElementById('app');
+let loading = false;
+let firstRunPwd = null;
+
+// Se já autenticado, redireciona imediatamente para o portal
+if (guardLogin()) {
+  // guardLogin() chamou location.replace() — execução encerra aqui
+} else {
+  init();
+}
+
+async function init() {
+  try {
+    firstRunPwd = await ensureInitialAdmin();
+  } catch (e) {
+    console.warn('Erro ao verificar usuários:', e);
+  }
+  render();
+}
+
+function render() {
+  app.innerHTML = `
+  <div style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:1.5rem;background:linear-gradient(160deg,#1e3a8a 0%,#1d4ed8 60%,#2563eb 100%);">
+
+    ${firstRunPwd ? `
+    <div style="background:#fef9c3;color:#713f12;border-radius:1rem;padding:1rem 1.25rem;
+      margin-bottom:1.5rem;width:100%;max-width:340px;font-size:.85rem;text-align:center;">
+      <div style="font-weight:800;margin-bottom:.25rem;">🔑 Primeiro acesso criado</div>
+      <div>Usuário: <strong>admin</strong></div>
+      <div>Senha: <strong>${firstRunPwd}</strong></div>
+      <div style="font-size:.75rem;margin-top:.375rem;color:#92400e;">Guarde estas credenciais antes de continuar!</div>
+    </div>` : ''}
+
+    <div style="text-align:center;margin-bottom:2rem;">
+      <div style="font-size:3.5rem;margin-bottom:.5rem;">⛺</div>
+      <h1 style="font-size:1.6rem;font-weight:800;color:#fff;margin:0;">Campori de Líderes</h1>
+      <p style="color:#93c5fd;font-size:.9rem;margin:.25rem 0 0;">APV — Sistema de Pontuação</p>
+    </div>
+
+    <div style="background:#fff;border-radius:1.5rem;padding:2rem;width:100%;max-width:340px;">
+      <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>
+          <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">Usuário</label>
+          <input type="text" id="login-user" placeholder="seu.usuario" autocomplete="username"
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:1rem;font-size:.95rem;outline:none;"
+            onkeydown="if(event.key==='Enter')document.getElementById('login-pwd').focus()">
+        </div>
+        <div>
+          <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">Senha</label>
+          <input type="password" id="login-pwd" placeholder="••••••••" autocomplete="current-password"
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:1rem;font-size:1rem;outline:none;"
+            onkeydown="if(event.key==='Enter')W.doLogin()">
+        </div>
+        <button onclick="W.doLogin()" id="btn-login" ${loading ? 'disabled' : ''}
+          style="width:100%;background:#1e3a8a;color:#fff;border:none;padding:1.1rem;
+          border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;margin-top:.25rem;
+          opacity:${loading ? .6 : 1};">
+          ${loading ? '⏳ Entrando...' : '🔐 Entrar'}
+        </button>
+      </div>
+    </div>
+  </div>`;
+}
+
+window.W = {
+  async doLogin() {
+    const username = document.getElementById('login-user')?.value?.trim();
+    const password = document.getElementById('login-pwd')?.value;
+    if (!username || !password) { toast('Preencha usuário e senha', 'error'); return; }
+    loading = true;
+    render();
+    try {
+      const user = await loginUser(username, password);
+      saveSession(user);
+      location.replace(portalUrlForUser(user));
+    } catch (e) {
+      toast(e.message, 'error');
+      loading = false;
+      render();
+      // Refocar o campo de senha após erro
+      setTimeout(() => document.getElementById('login-pwd')?.focus(), 50);
+    }
+  }
+};
+</script>
+</body>
+</html>

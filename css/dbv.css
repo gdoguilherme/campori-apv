@@ -1,0 +1,61 @@
+/* Tema DBV — Desbravadores
+   Primário:   Azul  #1B2A6B
+   Secundário: Vermelho #D41F26
+   Destaque:   Dourado  #F5C518
+*/
+
+:root {
+  --dbv-primary:   #1B2A6B;
+  --dbv-primary2:  #2D3E99;
+  --dbv-secondary: #D41F26;
+  --dbv-accent:    #F5C518;
+  --dbv-light:     #EEF0F8;
+  --dbv-muted:     #8A96CC;
+}
+
+/* Cabeçalho */
+.theme-header {
+  background: linear-gradient(135deg, var(--dbv-primary), var(--dbv-primary2));
+  color: #fff;
+}
+
+/* Botão principal */
+.theme-btn {
+  background: var(--dbv-primary);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+.theme-btn:hover { background: var(--dbv-primary2); }
+
+/* Filtros / pills ativos */
+.theme-pill-active {
+  background: var(--dbv-primary);
+  color: #fff;
+}
+
+/* Borda de destaque nos cards */
+.theme-border-active { border-left-color: var(--dbv-primary) !important; }
+
+/* Tabs */
+.tab-btn.active {
+  color: var(--dbv-primary);
+  border-bottom-color: var(--dbv-primary);
+}
+
+/* Badge de modalidade */
+.badge-dbv {
+  background: #EEF0F8;
+  color: var(--dbv-primary);
+  font-size: .7rem;
+  font-weight: 700;
+  padding: .2rem .6rem;
+  border-radius: 999px;
+}
+
+/* Destaque dourado */
+.theme-accent { color: var(--dbv-accent); }
+.theme-accent-bg { background: var(--dbv-accent); color: var(--dbv-primary); }
+
+/* Vermelho secundário */
+.theme-secondary { color: var(--dbv-secondary); }

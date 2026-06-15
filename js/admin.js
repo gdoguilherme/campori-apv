@@ -18,7 +18,7 @@ const S = {
   filterStatus: 'Todos',
   rankingCat: 'Todos',
   editingReq: null, editingUser: null, editingRegion: null,
-  formRole: 'region', generatedPwd: '',
+  formRole: 'region', formRegionId: null, generatedPwd: '',
   photoUrl: null, modal: null,
   loading: false,
 };
@@ -689,18 +689,27 @@ function mUserForm() {
             ${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${role === k ? 'selected' : ''}>${v}</option>`).join('')}
           </select>
         </div>
-        ${role === 'region' ? `
-          <div>${lbl('Região *')}<select id="u-region"
+        ${role === 'region' ? (() => {
+          const selReg = S.regions.find(r => r.id === (S.formRegionId || u?.regionId));
+          const derivedCat = selReg?.competitionCategory;
+          return `
+          <div>${lbl('Região *')}<select id="u-region" onchange="W.setFormRegion(this.value)"
             style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
-            <option value="">Selecione...</option>
-            ${S.regions.map(r => `<option value="${r.id}" ${u?.regionId === r.id ? 'selected' : ''}>${r.name}</option>`).join('')}
+            <option value="">Selecione a região...</option>
+            ${S.regions.map(r => `<option value="${r.id}" ${(S.formRegionId || u?.regionId) === r.id ? 'selected' : ''}>${r.name}</option>`).join('')}
           </select></div>
-          <div>${lbl('Modalidade *')}<select id="u-compcat"
-            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
-            <option value="">Selecione...</option>
-            <option value="DBV" ${u?.competitionCategory === 'DBV' ? 'selected' : ''}>DBV — Desbravadores</option>
-            <option value="AVT" ${u?.competitionCategory === 'AVT' ? 'selected' : ''}>AVT — Aventureiros</option>
-          </select></div>` : ''}
+          ${derivedCat
+            ? `<div style="background:${derivedCat === 'AVT' ? '#d1fae5' : '#dbeafe'};border-radius:.875rem;padding:.75rem 1rem;display:flex;align-items:center;gap:.5rem;">
+                <span style="font-size:1.1rem;">${derivedCat === 'AVT' ? '🟢' : '🔵'}</span>
+                <div>
+                  <div style="font-size:.75rem;font-weight:600;color:#374151;">Modalidade (definida pela região)</div>
+                  <div style="font-weight:800;color:${derivedCat === 'AVT' ? '#065f46' : '#1e40af'};font-size:.95rem;">${derivedCat} — ${derivedCat === 'AVT' ? 'Aventureiros' : 'Desbravadores'}</div>
+                </div>
+              </div>`
+            : selReg
+              ? `<div style="background:#fef9c3;border-radius:.875rem;padding:.75rem 1rem;font-size:.85rem;color:#92400e;">⚠️ Esta região não tem modalidade definida — edite a região primeiro</div>`
+              : ''}`;
+        })() : ''}
         ${role === 'judge' ? `
           <div>${lbl('Categoria *')}<select id="u-cat"
             style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
@@ -917,24 +926,27 @@ window.W = {
   openUserForm(id) {
     S.editingUser  = id ? S.users.find(u => u.id === id) : null;
     S.formRole     = S.editingUser?.role || 'region';
+    S.formRegionId = S.editingUser?.regionId || null;
     S.generatedPwd = genPassword();
     S.modal = 'user-form'; render();
   },
-  setFormRole(role) { S.formRole = role; render(); },
-  regenPwd()        { S.generatedPwd = genPassword(); render(); },
+  setFormRole(role)       { S.formRole = role; S.formRegionId = null; render(); },
+  setFormRegion(regionId) { S.formRegionId = regionId; render(); },
+  regenPwd()              { S.generatedPwd = genPassword(); render(); },
   async saveUser() {
     const name       = document.getElementById('u-name')?.value?.trim();
     const phone      = document.getElementById('u-phone')?.value?.trim();
     const username   = document.getElementById('u-username')?.value?.trim().toLowerCase();
     const role       = document.getElementById('u-role')?.value;
     const regionId   = document.getElementById('u-region')?.value || null;
-    const compCat    = document.getElementById('u-compcat')?.value || null;
+    const selectedReg = regionId ? S.regions.find(r => r.id === regionId) : null;
+    const compCat    = role === 'region' ? (selectedReg?.competitionCategory || null) : null;
     const judgeCat   = document.getElementById('u-cat')?.value || null;
     const pwd        = document.getElementById('u-pwd')?.value || S.generatedPwd;
     if (!name || !role) { toast('Nome e perfil são obrigatórios', 'error'); return; }
     if (!S.editingUser && !username) { toast('Usuário é obrigatório', 'error'); return; }
     if (role === 'region' && !regionId)  { toast('Selecione uma região', 'error'); return; }
-    if (role === 'region' && !compCat)   { toast('Selecione a modalidade (DBV/AVT)', 'error'); return; }
+    if (role === 'region' && !compCat)   { toast('A região selecionada não tem modalidade definida. Edite a região primeiro.', 'error'); return; }
     S.loading = true; render();
     try {
       if (S.editingUser) {

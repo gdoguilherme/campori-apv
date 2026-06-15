@@ -5,7 +5,7 @@ import {
   review as apiReview, saveReq as apiSaveReq, delReq as apiDelReq,
   createUser, updateUser, updatePassword, toggleUserActive as apiToggleUser,
   deleteUser as apiDeleteUser, deleteSubmission as apiDeleteSubmission,
-  saveRegion as apiSaveRegion, delRegion as apiDelRegion, seedRegions,
+  saveRegion as apiSaveRegion, delRegion as apiDelRegion,
   computeScores,
   CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS
 } from './api.js';
@@ -485,12 +485,6 @@ function tRegions() {
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
       <span style="font-weight:800;color:#1e293b;">Regiões (${S.regions.length})</span>
       <div style="display:flex;gap:.5rem;">
-        ${S.regions.length === 0
-          ? `<button onclick="W.seedRegions()"
-              style="background:#7c3aed;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">
-              🌱 Inicializar 16 regiões
-            </button>`
-          : ''}
         <button onclick="W.openRegionForm(null)"
           style="background:#166534;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Nova</button>
       </div>
@@ -499,7 +493,7 @@ function tRegions() {
       ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;">
           <div style="font-size:3rem;">🗺️</div>
           <p style="font-weight:600;">Nenhuma região cadastrada</p>
-          <p style="font-size:.85rem;">Clique em "Inicializar 16 regiões" para criar as regiões padrão</p>
+          <p style="font-size:.85rem;">Clique em "+ Nova" para cadastrar as regiões</p>
         </div>`
       : `<div style="display:flex;flex-direction:column;gap:.625rem;">
         ${sorted.map(reg => `
@@ -982,14 +976,6 @@ window.W = {
   openRegionForm(id) {
     S.editingRegion = id ? S.regions.find(r => r.id === id) : null;
     S.modal = 'region-form'; render();
-  },
-  async seedRegions() {
-    S.loading = true; render();
-    try {
-      const n = await seedRegions();
-      toast(`✅ ${n} regiões criadas!`);
-    } catch (e) { toast('Erro ao inicializar regiões.', 'error'); }
-    S.loading = false; render();
   },
   async saveRegion() {
     const name          = document.getElementById('reg-name')?.value?.trim();

@@ -5,28 +5,8 @@ import {
 
 // ── CONSTANTES ─────────────────────────────────────────────────
 
-// Usado como seed inicial; depois substituído pelo Firestore
-export const REGIONS_SEED = [
-  { id: '001R1',  name: '1ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-  { id: '002R2',  name: '2ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-  { id: '003R3',  name: '3ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-  { id: '004R4',  name: '4ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-  { id: '005R5',  name: '5ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-  { id: '006R6',  name: '6ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-  { id: '007R7',  name: '7ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-  { id: '008R8',  name: '8ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-  { id: '009R9',  name: '9ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-  { id: '010R10', name: '10ª Região', responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-  { id: '011R11', name: '11ª Região', responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-  { id: '012R12', name: '12ª Região', responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-  { id: '013R13', name: '13ª Região', responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-  { id: '014R14', name: '14ª Região', responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-  { id: '015R15', name: '15ª Região', responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-  { id: '016R16', name: '16ª Região', responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
-];
-
-// Cache dinâmico — atualizado pelo subRegions; inicia com o seed
-let _regionCache = REGIONS_SEED.map(r => ({ ...r }));
+// Cache dinâmico — atualizado pelo subRegions; inicia vazio (sem hardcode)
+let _regionCache = [];
 export const setRegionCache = regions => { _regionCache = regions; };
 
 export const CATEGORIES = ['ADM','Nas Casas','Nos Templos','Nas Ruas','Acampamento','Cozinha','Saúde','Eventos','Outros'];
@@ -305,18 +285,6 @@ export async function saveRegion(data) {
 
 export async function delRegion(id) {
   await deleteDoc(doc(db, 'regions', id));
-}
-
-export async function seedRegions() {
-  const snap = await getDocs(collection(db, 'regions'));
-  if (!snap.empty) return 0;
-  for (const r of REGIONS_SEED) {
-    await addDoc(collection(db, 'regions'), {
-      name: r.name, responsible: '', responsiblePhone: '',
-      competitionCategory: r.competitionCategory, active: true
-    });
-  }
-  return REGIONS_SEED.length;
 }
 
 // ── SUBMISSIONS ───────────────────────────────────────────────

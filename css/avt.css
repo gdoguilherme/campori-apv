@@ -1,0 +1,61 @@
+/* Tema AVT — Aventureiros
+   Primário:   Azul        #1E3A8A
+   Secundário: Verde       #4CAF50
+   Destaque:   Verm. escuro #8B1A1A
+*/
+
+:root {
+  --avt-primary:   #1E3A8A;
+  --avt-primary2:  #2563EB;
+  --avt-secondary: #4CAF50;
+  --avt-accent:    #8B1A1A;
+  --avt-light:     #EEF2FF;
+  --avt-muted:     #93C5FD;
+}
+
+/* Cabeçalho */
+.theme-header {
+  background: linear-gradient(135deg, var(--avt-primary), var(--avt-primary2));
+  color: #fff;
+}
+
+/* Botão principal */
+.theme-btn {
+  background: var(--avt-primary);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+.theme-btn:hover { background: var(--avt-primary2); }
+
+/* Filtros / pills ativos */
+.theme-pill-active {
+  background: var(--avt-primary);
+  color: #fff;
+}
+
+/* Borda de destaque nos cards */
+.theme-border-active { border-left-color: var(--avt-primary) !important; }
+
+/* Tabs */
+.tab-btn.active {
+  color: var(--avt-primary);
+  border-bottom-color: var(--avt-primary);
+}
+
+/* Badge de modalidade */
+.badge-avt {
+  background: #EEF2FF;
+  color: var(--avt-primary);
+  font-size: .7rem;
+  font-weight: 700;
+  padding: .2rem .6rem;
+  border-radius: 999px;
+}
+
+/* Verde secundário */
+.theme-accent { color: var(--avt-secondary); }
+.theme-accent-bg { background: var(--avt-secondary); color: #fff; }
+
+/* Vermelho escuro */
+.theme-secondary { color: var(--avt-accent); }

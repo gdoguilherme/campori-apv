@@ -1,6 +1,6 @@
 import { guardPage, logout as authLogout, saveSession, startExpiryWatcher } from './auth.js';
 import {
-  subReqs, subSubs, rname, toast,
+  subReqs, subSubs, rname, fmtDate, toast,
   doFiscalSuggestion, updatePassword, REGIONS, SCORE_PCTS
 } from './api.js';
 
@@ -16,6 +16,18 @@ const S = {
 };
 
 let _unsubReqs = null, _unsubSubs = null;
+
+// ── HELPERS ───────────────────────────────────────────────────
+function isDeadlinePassed(req) {
+  if (!req.deadline) return false;
+  const d = req.deadline.toDate ? req.deadline.toDate() : new Date(req.deadline);
+  return d < new Date();
+}
+function fmtDeadline(deadline) {
+  if (!deadline) return '';
+  const d = deadline.toDate ? deadline.toDate() : new Date(deadline);
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
 
 // ── INIT ──────────────────────────────────────────────────────
 export function init() {
@@ -155,9 +167,11 @@ function vScore() {
 }
 
 function scoreCard(req, existing) {
-  const hasSubItems = req.subItems?.length > 0;
-  const curScores   = S.fiscalScores[req.id] || {};
-  const borderLeft  = existing ? '4px solid #7c3aed' : 'none';
+  const hasSubItems    = req.subItems?.length > 0;
+  const curScores      = S.fiscalScores[req.id] || {};
+  const deadlinePassed = isDeadlinePassed(req);
+  const deadlineFmt    = fmtDeadline(req.deadline);
+  const borderLeft     = deadlinePassed ? '4px solid #ef4444' : existing ? '4px solid #7c3aed' : 'none';
 
   const statusBadge = existing
     ? existing.status === 'approved'
@@ -192,11 +206,16 @@ function scoreCard(req, existing) {
     });
 
     return `
-    <div style="background:#fff;border-radius:1rem;border:1px solid ${existing ? '#a78bfa' : '#e2e8f0'};
+    <div style="background:#fff;border-radius:1rem;border:1px solid ${deadlinePassed ? '#fca5a5' : existing ? '#a78bfa' : '#e2e8f0'};
       border-left:${borderLeft};padding:1rem;box-shadow:0 1px 3px rgba(0,0,0,.06);">
       <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem;">
         <span style="background:#ede9fe;color:#6d28d9;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts máx</span>
         ${statusBadge}
+        ${deadlinePassed
+          ? `<span style="background:#fee2e2;color:#991b1b;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">🔒 Prazo encerrado</span>`
+          : deadlineFmt
+            ? `<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">📅 ${deadlineFmt}</span>`
+            : ''}
       </div>
       <div style="font-weight:700;color:#1e293b;font-size:.95rem;margin-bottom:.75rem;">${req.name}</div>
       ${req.description ? `<div style="font-size:.8rem;color:#64748b;margin-bottom:.75rem;">${req.description}</div>` : ''}
@@ -205,37 +224,47 @@ function scoreCard(req, existing) {
         <div style="font-size:.9rem;font-weight:700;color:#1e293b;">
           Total: <span style="color:#7c3aed;">${calcTotal} / ${req.points} pts</span>
         </div>
-        <button onclick="W.submitSubItems('${req.id}')" ${S.loading ? 'disabled' : ''}
-          style="background:#7c3aed;color:#fff;border:none;padding:.625rem 1.25rem;
-          border-radius:.75rem;font-size:.9rem;font-weight:700;cursor:pointer;opacity:${S.loading ? .6 : 1};">
-          ${existing ? '🔄 Atualizar' : '✅ Confirmar'}
-        </button>
+        ${deadlinePassed
+          ? `<span style="font-size:.85rem;color:#dc2626;font-weight:700;">🔒 Encerrado</span>`
+          : `<button onclick="W.submitSubItems('${req.id}')" ${S.loading ? 'disabled' : ''}
+              style="background:#7c3aed;color:#fff;border:none;padding:.625rem 1.25rem;
+              border-radius:.75rem;font-size:.9rem;font-weight:700;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+              ${existing ? '🔄 Atualizar' : '✅ Confirmar'}
+            </button>`}
       </div>
     </div>`;
   }
 
   // Sem sub-itens: entrada numérica
   return `
-  <div style="background:#fff;border-radius:1rem;border:1px solid ${existing ? '#a78bfa' : '#e2e8f0'};
+  <div style="background:#fff;border-radius:1rem;border:1px solid ${deadlinePassed ? '#fca5a5' : existing ? '#a78bfa' : '#e2e8f0'};
     border-left:${borderLeft};padding:1rem;box-shadow:0 1px 3px rgba(0,0,0,.06);">
     <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem;">
       <span style="background:#ede9fe;color:#6d28d9;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts máx</span>
       ${statusBadge}
+      ${deadlinePassed
+        ? `<span style="background:#fee2e2;color:#991b1b;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">🔒 Prazo encerrado</span>`
+        : deadlineFmt
+          ? `<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">📅 ${deadlineFmt}</span>`
+          : ''}
     </div>
     <div style="font-weight:700;color:#1e293b;font-size:.95rem;margin-bottom:.5rem;">${req.name}</div>
     ${req.description ? `<div style="font-size:.8rem;color:#64748b;margin-bottom:.75rem;">${req.description}</div>` : ''}
     <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
       <input type="number" id="pts-${req.id}"
         value="${existing?.requirementPoints ?? ''}" min="0" max="${req.points}" placeholder="0"
-        style="width:80px;border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.5rem;
-        font-size:1rem;text-align:center;outline:none;font-weight:700;">
+        ${deadlinePassed ? 'readonly' : ''}
+        style="width:80px;border:1.5px solid ${deadlinePassed ? '#fca5a5' : '#e2e8f0'};border-radius:.625rem;padding:.5rem;
+        font-size:1rem;text-align:center;outline:none;font-weight:700;${deadlinePassed ? 'background:#fff1f1;' : ''}">
       <span style="font-size:.85rem;color:#64748b;">/ ${req.points} pts</span>
-      <button onclick="W.submitScore('${req.id}')" ${S.loading ? 'disabled' : ''}
-        style="flex:1;min-width:120px;background:#7c3aed;color:#fff;border:none;
-        padding:.625rem 1rem;border-radius:.75rem;font-size:.9rem;font-weight:700;cursor:pointer;
-        opacity:${S.loading ? .6 : 1};">
-        ${existing ? '🔄 Atualizar' : '✅ Confirmar'}
-      </button>
+      ${deadlinePassed
+        ? `<span style="flex:1;min-width:120px;text-align:center;font-size:.85rem;color:#dc2626;font-weight:700;">🔒 Encerrado</span>`
+        : `<button onclick="W.submitScore('${req.id}')" ${S.loading ? 'disabled' : ''}
+            style="flex:1;min-width:120px;background:#7c3aed;color:#fff;border:none;
+            padding:.625rem 1rem;border-radius:.75rem;font-size:.9rem;font-weight:700;cursor:pointer;
+            opacity:${S.loading ? .6 : 1};">
+            ${existing ? '🔄 Atualizar' : '✅ Confirmar'}
+          </button>`}
     </div>
   </div>`;
 }
@@ -303,6 +332,7 @@ window.W = {
   async submitSubItems(reqId) {
     const req = S.requirements.find(r => r.id === reqId);
     if (!req) return;
+    if (isDeadlinePassed(req)) { toast('Prazo para este requisito foi encerrado', 'error'); return; }
     const existing = S.submissions.find(s =>
       s.regionId === S.fiscalRegionId && s.requirementId === reqId && s.source === 'judge'
     );
@@ -339,6 +369,7 @@ window.W = {
   async submitScore(reqId) {
     const req = S.requirements.find(r => r.id === reqId);
     if (!req) return;
+    if (isDeadlinePassed(req)) { toast('Prazo para este requisito foi encerrado', 'error'); return; }
     const existing = S.submissions.find(s =>
       s.regionId === S.fiscalRegionId && s.requirementId === reqId && s.source === 'judge'
     );

@@ -5,16 +5,29 @@ import {
 
 // ── CONSTANTES ─────────────────────────────────────────────────
 
-export const REGIONS = [
-  { id: '001R1',  name: '1ª Região'  }, { id: '002R2',  name: '2ª Região'  },
-  { id: '003R3',  name: '3ª Região'  }, { id: '004R4',  name: '4ª Região'  },
-  { id: '005R5',  name: '5ª Região'  }, { id: '006R6',  name: '6ª Região'  },
-  { id: '007R7',  name: '7ª Região'  }, { id: '008R8',  name: '8ª Região'  },
-  { id: '009R9',  name: '9ª Região'  }, { id: '010R10', name: '10ª Região' },
-  { id: '011R11', name: '11ª Região' }, { id: '012R12', name: '12ª Região' },
-  { id: '013R13', name: '13ª Região' }, { id: '014R14', name: '14ª Região' },
-  { id: '015R15', name: '15ª Região' }, { id: '016R16', name: '16ª Região' },
+// Usado como seed inicial; depois substituído pelo Firestore
+export const REGIONS_SEED = [
+  { id: '001R1',  name: '1ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
+  { id: '002R2',  name: '2ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
+  { id: '003R3',  name: '3ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
+  { id: '004R4',  name: '4ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
+  { id: '005R5',  name: '5ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
+  { id: '006R6',  name: '6ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
+  { id: '007R7',  name: '7ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
+  { id: '008R8',  name: '8ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
+  { id: '009R9',  name: '9ª Região',  responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
+  { id: '010R10', name: '10ª Região', responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
+  { id: '011R11', name: '11ª Região', responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
+  { id: '012R12', name: '12ª Região', responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
+  { id: '013R13', name: '13ª Região', responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
+  { id: '014R14', name: '14ª Região', responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
+  { id: '015R15', name: '15ª Região', responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
+  { id: '016R16', name: '16ª Região', responsible: '', responsiblePhone: '', competitionCategory: 'DBV', active: true },
 ];
+
+// Cache dinâmico — atualizado pelo subRegions; inicia com o seed
+let _regionCache = REGIONS_SEED.map(r => ({ ...r }));
+export const setRegionCache = regions => { _regionCache = regions; };
 
 export const CATEGORIES = ['ADM','Nas Casas','Nos Templos','Nas Ruas','Acampamento','Cozinha','Saúde','Eventos','Outros'];
 export const PHASES = ['Pré-Requisito','No Campori'];
@@ -26,7 +39,7 @@ export const UPLOAD_SERVER = 'https://campori-apv-upload.fly.dev';
 
 // ── HELPERS ────────────────────────────────────────────────────
 
-export const rname = id => REGIONS.find(r => r.id === id)?.name || id;
+export const rname = id => _regionCache.find(r => r.id === id)?.name || id;
 
 export function fmtDate(ts) {
   if (!ts) return '—';
@@ -103,6 +116,14 @@ export function proofBlock(url, context = 'queue') {
 }
 
 // ── SUBSCRIPTIONS ─────────────────────────────────────────────
+
+export function subRegions(onUpdate) {
+  const q = query(collection(db, 'regions'), orderBy('name', 'asc'));
+  return onSnapshot(q,
+    snap => onUpdate(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+    err => toast('Erro ao carregar regiões: ' + err.message, 'error')
+  );
+}
 
 export function subReqs(onUpdate) {
   const q = query(collection(db, 'requirements'), orderBy('order', 'asc'));
@@ -267,6 +288,43 @@ export async function toggleUserActive(id, currentlyActive) {
   await updateDoc(doc(db, 'users', id), { active: !currentlyActive });
 }
 
+export async function deleteUser(id) {
+  await deleteDoc(doc(db, 'users', id));
+}
+
+// ── REGIONS ───────────────────────────────────────────────────
+
+export async function saveRegion(data) {
+  if (data.id) {
+    const { id, ...rest } = data;
+    await updateDoc(doc(db, 'regions', id), rest);
+  } else {
+    await addDoc(collection(db, 'regions'), { ...data, active: true });
+  }
+}
+
+export async function delRegion(id) {
+  await deleteDoc(doc(db, 'regions', id));
+}
+
+export async function seedRegions() {
+  const snap = await getDocs(collection(db, 'regions'));
+  if (!snap.empty) return 0;
+  for (const r of REGIONS_SEED) {
+    await addDoc(collection(db, 'regions'), {
+      name: r.name, responsible: '', responsiblePhone: '',
+      competitionCategory: r.competitionCategory, active: true
+    });
+  }
+  return REGIONS_SEED.length;
+}
+
+// ── SUBMISSIONS ───────────────────────────────────────────────
+
+export async function deleteSubmission(id) {
+  await deleteDoc(doc(db, 'submissions', id));
+}
+
 // ── UPLOAD ────────────────────────────────────────────────────
 
 export async function uploadFile(file, regionId, reqCode) {
@@ -284,7 +342,7 @@ export async function uploadFile(file, regionId, reqCode) {
 
 export function computeScores(submissions, requirements, users, catFilter = 'Todos') {
   const scores = {};
-  REGIONS.forEach(r => { scores[r.id] = { name: r.name, total: 0, count: 0, compCat: null }; });
+  _regionCache.forEach(r => { scores[r.id] = { name: r.name, total: 0, count: 0, compCat: r.competitionCategory || null }; });
   users.forEach(u => {
     if (u.role === 'region' && u.regionId && u.competitionCategory && scores[u.regionId])
       scores[u.regionId].compCat = u.competitionCategory;

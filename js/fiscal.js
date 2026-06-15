@@ -1,7 +1,8 @@
 import { guardPage, logout as authLogout, saveSession, startExpiryWatcher } from './auth.js';
 import {
-  subReqs, subSubs, rname, fmtDate, toast,
-  doFiscalSuggestion, updatePassword, REGIONS, SCORE_PCTS
+  subReqs, subSubs, subRegions, setRegionCache,
+  rname, fmtDate, toast,
+  doFiscalSuggestion, updatePassword, SCORE_PCTS
 } from './api.js';
 
 // ── ESTADO ────────────────────────────────────────────────────
@@ -9,13 +10,14 @@ const S = {
   user: null,
   requirements: [],
   submissions: [],
+  regions: [],
   fiscalRegionId: null,
   fiscalScores: {},   // { reqId: { siId: pct } }
   modal: null,        // 'change-password'
   loading: false,
 };
 
-let _unsubReqs = null, _unsubSubs = null;
+let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null;
 
 // ── HELPERS ───────────────────────────────────────────────────
 function isDeadlinePassed(req) {
@@ -36,8 +38,9 @@ export function init() {
   S.user = user;
   startExpiryWatcher();
 
-  _unsubReqs = subReqs(reqs => { S.requirements = reqs; render(); });
-  _unsubSubs = subSubs(null, subs => { S.submissions = subs; render(); });
+  _unsubReqs    = subReqs(reqs  => { S.requirements = reqs; render(); });
+  _unsubSubs    = subSubs(null, subs => { S.submissions = subs; render(); });
+  _unsubRegions = subRegions(regs => { S.regions = regs; setRegionCache(regs); render(); });
 
   render();
 }
@@ -84,7 +87,7 @@ function vSelectRegion() {
     </div>
 
     <div style="padding:1rem;display:grid;grid-template-columns:1fr 1fr;gap:.625rem;">
-      ${REGIONS.map(reg => {
+      ${S.regions.map(reg => {
         const fiscalSubs = S.submissions.filter(s =>
           s.regionId === reg.id &&
           s.source === 'judge' &&
@@ -117,7 +120,7 @@ function vSelectRegion() {
 // ── VIEW: AVALIAR REGIÃO ──────────────────────────────────────
 function vScore() {
   const cat = S.user.judgeCategory;
-  const reg = REGIONS.find(r => r.id === S.fiscalRegionId);
+  const reg = S.regions.find(r => r.id === S.fiscalRegionId);
 
   const reqs = S.requirements.filter(r =>
     r.active !== false &&
@@ -309,8 +312,9 @@ function mChangePassword() {
 // ── ACTIONS ───────────────────────────────────────────────────
 window.W = {
   logout() {
-    if (_unsubReqs) _unsubReqs();
-    if (_unsubSubs) _unsubSubs();
+    if (_unsubReqs)    _unsubReqs();
+    if (_unsubSubs)    _unsubSubs();
+    if (_unsubRegions) _unsubRegions();
     authLogout();
   },
 

@@ -1,27 +1,29 @@
 import { guardPage, logout as authLogout, saveSession, startExpiryWatcher } from './auth.js';
 import {
-  subReqs, subSubs, subUsers,
+  subReqs, subSubs, subUsers, subRegions, setRegionCache,
   rname, fmtDate, badge, toast, genPassword, proofBlock,
   review as apiReview, saveReq as apiSaveReq, delReq as apiDelReq,
   createUser, updateUser, updatePassword, toggleUserActive as apiToggleUser,
+  deleteUser as apiDeleteUser, deleteSubmission as apiDeleteSubmission,
+  saveRegion as apiSaveRegion, delRegion as apiDelRegion, seedRegions,
   computeScores,
-  REGIONS, CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS
+  CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS
 } from './api.js';
 
 // ── ESTADO ────────────────────────────────────────────────────
 const S = {
   user: null,
   adminTab: 'queue',
-  requirements: [], submissions: [], users: [],
+  requirements: [], submissions: [], users: [], regions: [],
   filterStatus: 'Todos',
   rankingCat: 'Todos',
-  editingReq: null, editingUser: null,
+  editingReq: null, editingUser: null, editingRegion: null,
   formRole: 'region', generatedPwd: '',
   photoUrl: null, modal: null,
   loading: false,
 };
 
-let _unsubReqs = null, _unsubSubs = null, _unsubUsers = null;
+let _unsubReqs = null, _unsubSubs = null, _unsubUsers = null, _unsubRegions = null;
 
 // ── INIT ──────────────────────────────────────────────────────
 export function init() {
@@ -30,9 +32,14 @@ export function init() {
   S.user = user;
   startExpiryWatcher();
 
-  _unsubReqs  = subReqs(reqs   => { S.requirements = reqs;   render(); });
-  _unsubSubs  = subSubs(null, subs => { S.submissions = subs;  render(); });
-  _unsubUsers = subUsers(users  => { S.users = users;          render(); });
+  _unsubReqs    = subReqs(reqs     => { S.requirements = reqs;   render(); });
+  _unsubSubs    = subSubs(null, subs => { S.submissions = subs;  render(); });
+  _unsubUsers   = subUsers(users   => { S.users = users;         render(); });
+  _unsubRegions = subRegions(regs  => {
+    S.regions = regs;
+    setRegionCache(regs);
+    render();
+  });
 
   render();
 }
@@ -88,9 +95,10 @@ function render() {
   const el = document.getElementById('app');
   if (!el) return;
   let html = vAdmin();
-  if (S.modal === 'req-form')         html += mReqForm();
-  else if (S.modal === 'user-form')   html += mUserForm();
-  else if (S.modal === 'photo')       html += mPhoto();
+  if (S.modal === 'req-form')            html += mReqForm();
+  else if (S.modal === 'user-form')      html += mUserForm();
+  else if (S.modal === 'region-form')    html += mRegionForm();
+  else if (S.modal === 'photo')          html += mPhoto();
   else if (S.modal === 'change-password') html += mChangePassword();
   el.innerHTML = html;
 }
@@ -106,7 +114,10 @@ function vAdmin() {
       { id: 'dashboard',  label: '📊 Dashboard' },
       { id: 'ranking',    label: '🏆 Ranking'   },
     ] : []),
-    ...(isSuperAdmin() ? [{ id: 'users', label: '👥 Usuários' }] : []),
+    ...(isSuperAdmin() ? [
+      { id: 'regions', label: '🗺️ Regiões' },
+      { id: 'users',   label: '👥 Usuários' },
+    ] : []),
   ];
 
   return `
@@ -143,8 +154,9 @@ function vAdmin() {
       ${S.adminTab === 'requirements' && isAdmin()  ? tReqs()    : ''}
       ${S.adminTab === 'history'      ? tHistory()  : ''}
       ${S.adminTab === 'dashboard'    && isAdmin()  ? tDashboard(): ''}
-      ${S.adminTab === 'ranking'      && isAdmin()  ? tRanking() : ''}
-      ${S.adminTab === 'users'        && isSuperAdmin() ? tUsers(): ''}
+      ${S.adminTab === 'ranking'      && isAdmin()       ? tRanking()  : ''}
+      ${S.adminTab === 'regions'      && isSuperAdmin()  ? tRegions()  : ''}
+      ${S.adminTab === 'users'        && isSuperAdmin()  ? tUsers()    : ''}
     </div>
   </div>`;
 }
@@ -294,13 +306,22 @@ function tHistory() {
             ${sub.rejectionReason ? `<div style="font-size:.78rem;color:#dc2626;margin-bottom:.5rem;background:#fff1f1;padding:.375rem .625rem;border-radius:.5rem;">Motivo: ${sub.rejectionReason}</div>` : ''}
             ${sub.notes ? `<div style="background:#f8fafc;border-radius:.5rem;padding:.4rem .625rem;font-size:.78rem;color:#475569;margin-bottom:.5rem;">"${sub.notes}"</div>` : ''}
             ${subItemDetails(sub)}
-            ${sub.status !== 'pending'
-              ? `<button onclick="W.reopen('${sub.id}')"
-                  style="width:100%;margin-top:.625rem;padding:.625rem;background:#f8fafc;border:1.5px solid #e2e8f0;
-                  border-radius:.75rem;color:#475569;font-size:.82rem;font-weight:600;cursor:pointer;">
-                  🔄 Reverter para revisão
-                </button>`
-              : ''}
+            <div style="display:flex;gap:.5rem;margin-top:.625rem;">
+              ${sub.status !== 'pending'
+                ? `<button onclick="W.reopen('${sub.id}')"
+                    style="flex:1;padding:.625rem;background:#f8fafc;border:1.5px solid #e2e8f0;
+                    border-radius:.75rem;color:#475569;font-size:.82rem;font-weight:600;cursor:pointer;">
+                    🔄 Reverter
+                  </button>`
+                : ''}
+              ${isSuperAdmin()
+                ? `<button onclick="W.deleteSubmission('${sub.id}')"
+                    style="padding:.625rem .875rem;background:#fef2f2;border:1.5px solid #fca5a5;
+                    border-radius:.75rem;color:#dc2626;font-size:.82rem;font-weight:600;cursor:pointer;">
+                    🗑️ Excluir
+                  </button>`
+                : ''}
+            </div>
           </div>
         </div>`).join('')}
       </div>`}
@@ -456,6 +477,62 @@ function tRanking() {
   </div>`;
 }
 
+// ── TAB: REGIÕES ──────────────────────────────────────────────
+function tRegions() {
+  const sorted = [...S.regions].sort((a, b) => a.name.localeCompare(b.name));
+  return `
+  <div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
+      <span style="font-weight:800;color:#1e293b;">Regiões (${S.regions.length})</span>
+      <div style="display:flex;gap:.5rem;">
+        ${S.regions.length === 0
+          ? `<button onclick="W.seedRegions()"
+              style="background:#7c3aed;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">
+              🌱 Inicializar 16 regiões
+            </button>`
+          : ''}
+        <button onclick="W.openRegionForm(null)"
+          style="background:#166534;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Nova</button>
+      </div>
+    </div>
+    ${sorted.length === 0
+      ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;">
+          <div style="font-size:3rem;">🗺️</div>
+          <p style="font-weight:600;">Nenhuma região cadastrada</p>
+          <p style="font-size:.85rem;">Clique em "Inicializar 16 regiões" para criar as regiões padrão</p>
+        </div>`
+      : `<div style="display:flex;flex-direction:column;gap:.625rem;">
+        ${sorted.map(reg => `
+        <div class="card" style="padding:1rem;overflow:visible;border:1px solid ${reg.active === false ? '#fee2e2' : '#e2e8f0'};">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;">
+            <div style="flex:1;">
+              <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
+                <span style="background:${reg.competitionCategory === 'AVT' ? '#d1fae5' : '#dbeafe'};
+                  color:${reg.competitionCategory === 'AVT' ? '#065f46' : '#1d4ed8'};
+                  font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">
+                  ${reg.competitionCategory || 'DBV'}
+                </span>
+                ${reg.active === false ? `<span style="background:#fee2e2;color:#dc2626;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">Inativa</span>` : ''}
+              </div>
+              <div style="font-weight:700;color:#1e293b;">${reg.name}</div>
+              ${reg.responsible
+                ? `<div style="font-size:.78rem;color:#64748b;margin-top:.15rem;">
+                    👤 ${reg.responsible}${reg.responsiblePhone ? ` · ${reg.responsiblePhone}` : ''}
+                  </div>`
+                : `<div style="font-size:.75rem;color:#94a3b8;margin-top:.15rem;">Sem responsável cadastrado</div>`}
+            </div>
+            <div style="display:flex;gap:.375rem;flex-shrink:0;">
+              <button onclick="W.openRegionForm('${reg.id}')"
+                style="background:#eff6ff;border:none;color:#1d4ed8;padding:.5rem;border-radius:.625rem;cursor:pointer;">✏️</button>
+              <button onclick="W.delRegion('${reg.id}','${reg.name}')"
+                style="background:#fef2f2;border:none;color:#ef4444;padding:.5rem;border-radius:.625rem;cursor:pointer;">🗑️</button>
+            </div>
+          </div>
+        </div>`).join('')}
+      </div>`}
+  </div>`;
+}
+
 // ── TAB: USUÁRIOS ─────────────────────────────────────────────
 function tUsers() {
   const sorted = [...S.users].sort((a, b) => a.name.localeCompare(b.name));
@@ -493,6 +570,8 @@ function tUsers() {
                 color:${u.active === false ? '#16a34a' : '#ef4444'};padding:.5rem;border-radius:.625rem;cursor:pointer;">
                 ${u.active === false ? '✅' : '🚫'}
               </button>
+              ${isSuperAdmin() ? `<button onclick="W.deleteUser('${u.id}','${u.name}')"
+                style="background:#fef2f2;border:none;color:#dc2626;padding:.5rem;border-radius:.625rem;cursor:pointer;">🗑️</button>` : ''}
             </div>
           </div>
         </div>`).join('')}
@@ -620,7 +699,7 @@ function mUserForm() {
           <div>${lbl('Região *')}<select id="u-region"
             style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
             <option value="">Selecione...</option>
-            ${REGIONS.map(r => `<option value="${r.id}" ${u?.regionId === r.id ? 'selected' : ''}>${r.name}</option>`).join('')}
+            ${S.regions.map(r => `<option value="${r.id}" ${u?.regionId === r.id ? 'selected' : ''}>${r.name}</option>`).join('')}
           </select></div>
           <div>${lbl('Modalidade *')}<select id="u-compcat"
             style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
@@ -672,6 +751,45 @@ function mPhoto() {
   </div>`;
 }
 
+// ── MODAL: REGIÃO ─────────────────────────────────────────────
+function mRegionForm() {
+  const r      = S.editingRegion || {};
+  const isEdit = !!r.id;
+  const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
+
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:420px;">
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">${isEdit ? 'Editar' : 'Nova'} Região</h2>
+      <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>${lbl('Nome *')}<input id="reg-name" type="text" value="${r.name || ''}" placeholder="Ex: 1ª Região"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Responsável')}<input id="reg-responsible" type="text" value="${r.responsible || ''}" placeholder="Nome do responsável"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Telefone do Responsável')}<input id="reg-phone" type="tel" value="${r.responsiblePhone || ''}" placeholder="(11) 99999-9999"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Modalidade *')}
+          <select id="reg-compcat" style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
+            <option value="DBV" ${(r.competitionCategory || 'DBV') === 'DBV' ? 'selected' : ''}>DBV — Desbravadores</option>
+            <option value="AVT" ${r.competitionCategory === 'AVT' ? 'selected' : ''}>AVT — Aventureiros</option>
+          </select>
+        </div>
+        ${isEdit ? `
+        <div style="display:flex;align-items:center;gap:.75rem;">
+          <input type="checkbox" id="reg-active" ${r.active !== false ? 'checked' : ''} style="width:1.1rem;height:1.1rem;">
+          <label for="reg-active" style="font-size:.9rem;font-weight:600;color:#374151;">Região ativa</label>
+        </div>` : ''}
+        <button onclick="W.saveRegion()" ${S.loading ? 'disabled' : ''}
+          style="width:100%;background:#166534;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          ${S.loading ? '⏳ Salvando...' : isEdit ? '💾 Salvar' : '+ Criar Região'}
+        </button>
+      </div>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
 // ── MODAL: TROCAR SENHA ───────────────────────────────────────
 function mChangePassword() {
   return `
@@ -710,9 +828,10 @@ function mChangePassword() {
 // ── ACTIONS ───────────────────────────────────────────────────
 window.W = {
   logout() {
-    if (_unsubReqs)  _unsubReqs();
-    if (_unsubSubs)  _unsubSubs();
-    if (_unsubUsers) _unsubUsers();
+    if (_unsubReqs)    _unsubReqs();
+    if (_unsubSubs)    _unsubSubs();
+    if (_unsubUsers)   _unsubUsers();
+    if (_unsubRegions) _unsubRegions();
     authLogout();
   },
 
@@ -849,6 +968,52 @@ window.W = {
   toggleUser(id, currentlyActive) {
     apiToggleUser(id, currentlyActive)
       .then(() => toast(currentlyActive ? 'Usuário desativado' : 'Usuário ativado!'));
+  },
+  deleteUser(id, name) {
+    if (!confirm(`Excluir permanentemente o usuário "${name}"?\n\nEsta ação não pode ser desfeita.`)) return;
+    apiDeleteUser(id).then(() => toast('Usuário excluído.', 'info'));
+  },
+  deleteSubmission(id) {
+    if (!confirm('Excluir esta comprovação permanentemente?\n\nEsta ação não pode ser desfeita.')) return;
+    apiDeleteSubmission(id).then(() => toast('Comprovação excluída.', 'info'));
+  },
+
+  // ── Regiões ────────────────────────────────────────────────
+  openRegionForm(id) {
+    S.editingRegion = id ? S.regions.find(r => r.id === id) : null;
+    S.modal = 'region-form'; render();
+  },
+  async seedRegions() {
+    S.loading = true; render();
+    try {
+      const n = await seedRegions();
+      toast(`✅ ${n} regiões criadas!`);
+    } catch (e) { toast('Erro ao inicializar regiões.', 'error'); }
+    S.loading = false; render();
+  },
+  async saveRegion() {
+    const name          = document.getElementById('reg-name')?.value?.trim();
+    const responsible   = document.getElementById('reg-responsible')?.value?.trim();
+    const phone         = document.getElementById('reg-phone')?.value?.trim();
+    const compCat       = document.getElementById('reg-compcat')?.value || 'DBV';
+    const activeEl      = document.getElementById('reg-active');
+    const active        = activeEl ? activeEl.checked : true;
+    if (!name) { toast('Nome é obrigatório', 'error'); return; }
+    S.loading = true; render();
+    try {
+      await apiSaveRegion({
+        ...(S.editingRegion?.id ? { id: S.editingRegion.id } : {}),
+        name, responsible: responsible || '', responsiblePhone: phone || '',
+        competitionCategory: compCat, active
+      });
+      S.modal = null; S.editingRegion = null;
+      toast('Região salva! ✅');
+    } catch (e) { toast('Erro ao salvar.', 'error'); }
+    S.loading = false; render();
+  },
+  delRegion(id, name) {
+    if (!confirm(`Excluir a região "${name}"?\n\nEsta ação não pode ser desfeita.`)) return;
+    apiDelRegion(id).then(() => toast('Região excluída.', 'info'));
   },
 
   // ── Senha ──────────────────────────────────────────────────

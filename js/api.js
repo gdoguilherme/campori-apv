@@ -274,17 +274,59 @@ export async function deleteUser(id) {
 
 // ── REGIONS ───────────────────────────────────────────────────
 
-export async function saveRegion(data) {
-  if (data.id) {
-    const { id, ...rest } = data;
-    await updateDoc(doc(db, 'regions', id), rest);
-  } else {
-    await addDoc(collection(db, 'regions'), { ...data, active: true });
+function slugify(str) {
+  return (str || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+// Gera um login único baseado na modalidade + nome da região (evita colisão entre regiões homônimas)
+async function generateRegionUsername(name, competitionCategory) {
+  const base = `${(competitionCategory || 'dbv').toLowerCase()}-${slugify(name)}`;
+  let username = base;
+  let i = 2;
+  while (true) {
+    const snap = await getDocs(query(collection(db, 'users'), where('username', '==', username)));
+    if (snap.empty) return username;
+    username = `${base}-${i++}`;
   }
 }
 
-export async function delRegion(id) {
+// Cria a região e o usuário/login vinculado automaticamente
+export async function createRegion(data) {
+  const regRef = await addDoc(collection(db, 'regions'), {
+    name: data.name, responsible: data.responsible || '', responsiblePhone: data.responsiblePhone || '',
+    competitionCategory: data.competitionCategory, active: true
+  });
+  const username = await generateRegionUsername(data.name, data.competitionCategory);
+  const password = data.password || genPassword();
+  await addDoc(collection(db, 'users'), {
+    name: data.name, phone: data.responsiblePhone || '', username, password,
+    role: 'region', regionId: regRef.id, competitionCategory: data.competitionCategory,
+    active: true, createdAt: serverTimestamp(), createdBy: 'system'
+  });
+  return { id: regRef.id, username, password };
+}
+
+// Atualiza a região e sincroniza nome/modalidade/status/senha do usuário vinculado
+export async function updateRegion(id, data, linkedUserId, password) {
+  await updateDoc(doc(db, 'regions', id), data);
+  if (linkedUserId) {
+    await updateDoc(doc(db, 'users', linkedUserId), {
+      name: data.name,
+      competitionCategory: data.competitionCategory,
+      active: data.active,
+      ...(password ? { password } : {})
+    });
+  }
+}
+
+// Exclui a região e o usuário vinculado
+export async function delRegion(id, linkedUserId) {
   await deleteDoc(doc(db, 'regions', id));
+  if (linkedUserId) await deleteDoc(doc(db, 'users', linkedUserId));
 }
 
 // ── SUBMISSIONS ───────────────────────────────────────────────

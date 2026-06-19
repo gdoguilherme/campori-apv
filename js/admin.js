@@ -5,7 +5,7 @@ import {
   review as apiReview, saveReq as apiSaveReq, delReq as apiDelReq,
   createUser, updateUser, updatePassword, toggleUserActive as apiToggleUser,
   deleteUser as apiDeleteUser, deleteSubmission as apiDeleteSubmission,
-  saveRegion as apiSaveRegion, delRegion as apiDelRegion,
+  createRegion as apiCreateRegion, updateRegion as apiUpdateRegion, delRegion as apiDelRegion,
   computeScores,
   CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS
 } from './api.js';
@@ -18,7 +18,7 @@ const S = {
   filterStatus: 'Todos',
   rankingCat: 'Todos',
   editingReq: null, editingUser: null, editingRegion: null,
-  formRole: 'region', formRegionId: null, generatedPwd: '',
+  formRole: 'approver', generatedPwd: '',
   photoUrl: null, modal: null,
   loading: false,
 };
@@ -480,6 +480,7 @@ function tRanking() {
 // ── TAB: REGIÕES ──────────────────────────────────────────────
 function tRegions() {
   const sorted = [...S.regions].sort((a, b) => a.name.localeCompare(b.name));
+  const linkedUserOf = regId => S.users.find(u => u.regionId === regId && u.role === 'region');
   return `
   <div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
@@ -514,6 +515,9 @@ function tRegions() {
                     👤 ${reg.responsible}${reg.responsiblePhone ? ` · ${reg.responsiblePhone}` : ''}
                   </div>`
                 : `<div style="font-size:.75rem;color:#94a3b8;margin-top:.15rem;">Sem responsável cadastrado</div>`}
+              ${(() => { const lu = linkedUserOf(reg.id); return lu
+                ? `<div style="font-size:.72rem;color:#94a3b8;margin-top:.2rem;">🔑 Login: <strong>@${lu.username}</strong></div>`
+                : `<div style="font-size:.72rem;color:#dc2626;margin-top:.2rem;">⚠️ Sem usuário vinculado</div>`; })()}
             </div>
             <div style="display:flex;gap:.375rem;flex-shrink:0;">
               <button onclick="W.openRegionForm('${reg.id}')"
@@ -529,11 +533,11 @@ function tRegions() {
 
 // ── TAB: USUÁRIOS ─────────────────────────────────────────────
 function tUsers() {
-  const sorted = [...S.users].sort((a, b) => a.name.localeCompare(b.name));
+  const sorted = [...S.users].filter(u => u.role !== 'region').sort((a, b) => a.name.localeCompare(b.name));
   return `
   <div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
-      <span style="font-weight:800;color:#1e293b;">Usuários (${S.users.length})</span>
+      <span style="font-weight:800;color:#1e293b;">Usuários (${sorted.length})</span>
       <button onclick="W.openUserForm(null)"
         style="background:#166534;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Novo</button>
     </div>
@@ -549,7 +553,6 @@ function tUsers() {
                   color:${u.role === 'superadmin' ? '#92400e' : u.role === 'admin' ? '#1d4ed8' : u.role === 'judge' ? '#6d28d9' : '#166534'};
                   font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${ROLES[u.role] || u.role}</span>
                 ${u.active === false ? `<span style="background:#fee2e2;color:#dc2626;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">Inativo</span>` : ''}
-                ${u.regionId ? `<span style="background:#f1f5f9;color:#475569;font-size:.7rem;padding:.2rem .6rem;border-radius:999px;">${rname(u.regionId)}</span>` : ''}
                 ${u.competitionCategory ? `<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${u.competitionCategory}</span>` : ''}
                 ${u.judgeCategory ? `<span style="background:#f5f3ff;color:#6d28d9;font-size:.7rem;padding:.2rem .6rem;border-radius:999px;">${u.judgeCategory}</span>` : ''}
               </div>
@@ -665,9 +668,10 @@ function mReqForm() {
 
 // ── MODAL: USUÁRIO ────────────────────────────────────────────
 function mUserForm() {
-  const u      = S.editingUser;
-  const isEdit = !!u?.id;
-  const role   = S.formRole || u?.role || 'region';
+  const u           = S.editingUser;
+  const isEdit      = !!u?.id;
+  const roleOptions = Object.entries(ROLES).filter(([k]) => k !== 'region');
+  const role        = S.formRole || u?.role || roleOptions[0][0];
   const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
 
   return `
@@ -686,30 +690,9 @@ function mUserForm() {
         <div>${lbl('Perfil *')}
           <select id="u-role" onchange="W.setFormRole(this.value)"
             style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
-            ${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${role === k ? 'selected' : ''}>${v}</option>`).join('')}
+            ${roleOptions.map(([k, v]) => `<option value="${k}" ${role === k ? 'selected' : ''}>${v}</option>`).join('')}
           </select>
         </div>
-        ${role === 'region' ? (() => {
-          const selReg = S.regions.find(r => r.id === (S.formRegionId || u?.regionId));
-          const derivedCat = selReg?.competitionCategory;
-          return `
-          <div>${lbl('Região *')}<select id="u-region" onchange="W.setFormRegion(this.value)"
-            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
-            <option value="">Selecione a região...</option>
-            ${S.regions.map(r => `<option value="${r.id}" ${(S.formRegionId || u?.regionId) === r.id ? 'selected' : ''}>${r.name}</option>`).join('')}
-          </select></div>
-          ${derivedCat
-            ? `<div style="background:${derivedCat === 'AVT' ? '#d1fae5' : '#dbeafe'};border-radius:.875rem;padding:.75rem 1rem;display:flex;align-items:center;gap:.5rem;">
-                <span style="font-size:1.1rem;">${derivedCat === 'AVT' ? '🟢' : '🔵'}</span>
-                <div>
-                  <div style="font-size:.75rem;font-weight:600;color:#374151;">Modalidade (definida pela região)</div>
-                  <div style="font-weight:800;color:${derivedCat === 'AVT' ? '#065f46' : '#1e40af'};font-size:.95rem;">${derivedCat} — ${derivedCat === 'AVT' ? 'Aventureiros' : 'Desbravadores'}</div>
-                </div>
-              </div>`
-            : selReg
-              ? `<div style="background:#fef9c3;border-radius:.875rem;padding:.75rem 1rem;font-size:.85rem;color:#92400e;">⚠️ Esta região não tem modalidade definida — edite a região primeiro</div>`
-              : ''}`;
-        })() : ''}
         ${role === 'judge' ? `
           <div>${lbl('Categoria *')}<select id="u-cat"
             style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
@@ -758,6 +741,7 @@ function mPhoto() {
 function mRegionForm() {
   const r      = S.editingRegion || {};
   const isEdit = !!r.id;
+  const linkedUser = isEdit ? S.users.find(u => u.regionId === r.id && u.role === 'region') : null;
   const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
 
   return `
@@ -777,6 +761,29 @@ function mRegionForm() {
             <option value="AVT" ${r.competitionCategory === 'AVT' ? 'selected' : ''}>AVT — Aventureiros</option>
           </select>
         </div>
+        ${isEdit ? `
+        <div style="background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;">
+          <div style="font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">
+            🔑 Usuário vinculado: <strong>${linkedUser ? `@${linkedUser.username}` : '— não encontrado'}</strong>
+          </div>
+          <div style="display:flex;align-items:center;gap:.75rem;">
+            <input id="reg-pwd" type="text" value="${S.generatedPwd}"
+              style="flex:1;border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.625rem;font-size:1rem;font-weight:700;letter-spacing:.1rem;background:#fff;outline:none;">
+            <button onclick="W.regenPwd()"
+              style="background:#166534;border:none;color:#fff;padding:.625rem .875rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔄</button>
+          </div>
+          <div style="font-size:.75rem;color:#64748b;margin-top:.375rem;">Senha atual do login da região</div>
+        </div>` : `
+        <div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:.875rem;padding:.875rem;">
+          <div style="font-size:.82rem;font-weight:700;color:#166534;margin-bottom:.375rem;">🔑 Login gerado automaticamente · senha:</div>
+          <div style="display:flex;align-items:center;gap:.75rem;">
+            <input id="reg-pwd" type="text" value="${S.generatedPwd}"
+              style="flex:1;border:1.5px solid #bbf7d0;border-radius:.625rem;padding:.625rem;font-size:1rem;font-weight:700;letter-spacing:.1rem;background:#fff;outline:none;">
+            <button onclick="W.regenPwd()"
+              style="background:#166534;border:none;color:#fff;padding:.625rem .875rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔄</button>
+          </div>
+          <div style="font-size:.75rem;color:#16a34a;margin-top:.375rem;">Anote e repasse ao responsável da região</div>
+        </div>`}
         ${isEdit ? `
         <div style="display:flex;align-items:center;gap:.75rem;">
           <input type="checkbox" id="reg-active" ${r.active !== false ? 'checked' : ''} style="width:1.1rem;height:1.1rem;">
@@ -925,43 +932,32 @@ window.W = {
   // ── Usuários ───────────────────────────────────────────────
   openUserForm(id) {
     S.editingUser  = id ? S.users.find(u => u.id === id) : null;
-    S.formRole     = S.editingUser?.role || 'region';
-    S.formRegionId = S.editingUser?.regionId || null;
+    S.formRole     = S.editingUser?.role || 'approver';
     S.generatedPwd = genPassword();
     S.modal = 'user-form'; render();
   },
-  setFormRole(role)       { S.formRole = role; S.formRegionId = null; render(); },
-  setFormRegion(regionId) { S.formRegionId = regionId; render(); },
-  regenPwd()              { S.generatedPwd = genPassword(); render(); },
+  setFormRole(role) { S.formRole = role; render(); },
+  regenPwd()        { S.generatedPwd = genPassword(); render(); },
   async saveUser() {
-    const name       = document.getElementById('u-name')?.value?.trim();
-    const phone      = document.getElementById('u-phone')?.value?.trim();
-    const username   = document.getElementById('u-username')?.value?.trim().toLowerCase();
-    const role       = document.getElementById('u-role')?.value;
-    const regionId   = document.getElementById('u-region')?.value || null;
-    const selectedReg = regionId ? S.regions.find(r => r.id === regionId) : null;
-    const compCat    = role === 'region' ? (selectedReg?.competitionCategory || null) : null;
-    const judgeCat   = document.getElementById('u-cat')?.value || null;
-    const pwd        = document.getElementById('u-pwd')?.value || S.generatedPwd;
+    const name     = document.getElementById('u-name')?.value?.trim();
+    const phone    = document.getElementById('u-phone')?.value?.trim();
+    const username = document.getElementById('u-username')?.value?.trim().toLowerCase();
+    const role     = document.getElementById('u-role')?.value;
+    const judgeCat = document.getElementById('u-cat')?.value || null;
+    const pwd      = document.getElementById('u-pwd')?.value || S.generatedPwd;
     if (!name || !role) { toast('Nome e perfil são obrigatórios', 'error'); return; }
     if (!S.editingUser && !username) { toast('Usuário é obrigatório', 'error'); return; }
-    if (role === 'region' && !regionId)  { toast('Selecione uma região', 'error'); return; }
-    if (role === 'region' && !compCat)   { toast('A região selecionada não tem modalidade definida. Edite a região primeiro.', 'error'); return; }
     S.loading = true; render();
     try {
       if (S.editingUser) {
         await updateUser(S.editingUser.id, {
           name, phone: phone || '', role,
-          regionId: regionId || null,
-          competitionCategory: compCat || null,
           judgeCategory: judgeCat || null
         });
         toast('Usuário atualizado! ✅');
       } else {
         await createUser({
           name, phone: phone || '', username, password: pwd, role,
-          regionId: regionId || null,
-          competitionCategory: compCat || null,
           judgeCategory: judgeCat || null
         }, S.user);
         toast(`✅ Usuário criado! Senha: ${pwd}`);
@@ -987,6 +983,8 @@ window.W = {
   // ── Regiões ────────────────────────────────────────────────
   openRegionForm(id) {
     S.editingRegion = id ? S.regions.find(r => r.id === id) : null;
+    const linkedUser = id ? S.users.find(u => u.regionId === id && u.role === 'region') : null;
+    S.generatedPwd = linkedUser?.password || genPassword();
     S.modal = 'region-form'; render();
   },
   async saveRegion() {
@@ -994,24 +992,36 @@ window.W = {
     const responsible   = document.getElementById('reg-responsible')?.value?.trim();
     const phone         = document.getElementById('reg-phone')?.value?.trim();
     const compCat       = document.getElementById('reg-compcat')?.value || 'DBV';
+    const pwd           = document.getElementById('reg-pwd')?.value || S.generatedPwd;
     const activeEl      = document.getElementById('reg-active');
     const active        = activeEl ? activeEl.checked : true;
     if (!name) { toast('Nome é obrigatório', 'error'); return; }
     S.loading = true; render();
     try {
-      await apiSaveRegion({
-        ...(S.editingRegion?.id ? { id: S.editingRegion.id } : {}),
-        name, responsible: responsible || '', responsiblePhone: phone || '',
-        competitionCategory: compCat, active
-      });
-      S.modal = null; S.editingRegion = null;
-      toast('Região salva! ✅');
-    } catch (e) { toast('Erro ao salvar.', 'error'); }
+      if (S.editingRegion?.id) {
+        const linkedUser = S.users.find(u => u.regionId === S.editingRegion.id && u.role === 'region');
+        await apiUpdateRegion(S.editingRegion.id, {
+          name, responsible: responsible || '', responsiblePhone: phone || '',
+          competitionCategory: compCat, active
+        }, linkedUser?.id, pwd);
+        toast('Região salva! ✅');
+        S.modal = null; S.editingRegion = null;
+      } else {
+        const { username, password } = await apiCreateRegion({
+          name, responsible: responsible || '', responsiblePhone: phone || '',
+          competitionCategory: compCat, password: pwd
+        });
+        toast(`✅ Região criada! Login: ${username}`);
+        setTimeout(() => alert(`Login da região: ${username}\nSenha: ${password}\n\nAnote antes de fechar!`), 300);
+        S.modal = null; S.editingRegion = null;
+      }
+    } catch (e) { toast(e.message || 'Erro ao salvar.', 'error'); }
     S.loading = false; render();
   },
   delRegion(id, name) {
-    if (!confirm(`Excluir a região "${name}"?\n\nEsta ação não pode ser desfeita.`)) return;
-    apiDelRegion(id).then(() => toast('Região excluída.', 'info'));
+    if (!confirm(`Excluir a região "${name}"?\n\nIsso também excluirá o usuário/login vinculado.\nEsta ação não pode ser desfeita.`)) return;
+    const linkedUser = S.users.find(u => u.regionId === id && u.role === 'region');
+    apiDelRegion(id, linkedUser?.id).then(() => toast('Região e usuário excluídos.', 'info'));
   },
 
   // ── Senha ──────────────────────────────────────────────────

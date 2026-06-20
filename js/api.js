@@ -246,14 +246,14 @@ export async function delReq(id) {
 // ── USERS ─────────────────────────────────────────────────────
 
 export async function createUser(data, currentUser) {
-  const snap = await getDocs(query(collection(db, 'users'), where('username', '==', data.username)));
-  if (!snap.empty) throw new Error('Este usuário já existe');
+  const username = await generateUsernameFromName(data.name);
   await addDoc(collection(db, 'users'), {
-    ...data,
+    ...data, username,
     active: true,
     createdAt: serverTimestamp(),
     createdBy: currentUser?.username || 'system'
   });
+  return { username };
 }
 
 export async function updateUser(id, data) {
@@ -282,25 +282,36 @@ function slugify(str) {
     .replace(/^-+|-+$/g, '');
 }
 
-// Gera um login único baseado na modalidade + nome da região (evita colisão entre regiões homônimas)
-async function generateRegionUsername(name, competitionCategory) {
-  const base = `${(competitionCategory || 'dbv').toLowerCase()}-${slugify(name)}`;
-  let username = base;
-  let i = 2;
-  while (true) {
-    const snap = await getDocs(query(collection(db, 'users'), where('username', '==', username)));
-    if (snap.empty) return username;
-    username = `${base}-${i++}`;
-  }
+async function usernameTaken(username) {
+  const snap = await getDocs(query(collection(db, 'users'), where('username', '==', username)));
+  return !snap.empty;
 }
 
-// Cria a região e o usuário/login vinculado automaticamente
+// Gera um login único a partir de um nome: tenta nome.sobrenome, depois nome.inicial,
+// e por fim acrescenta um sufixo numérico se ainda houver colisão
+async function generateUsernameFromName(fullName) {
+  const words = slugify(fullName).split('-').filter(Boolean);
+  if (words.length === 0) words.push('usuario');
+  const first = words[0];
+  const last  = words[words.length - 1];
+  const candidates = words.length > 1 ? [`${first}.${last}`, `${first}.${last[0]}`] : [first];
+
+  for (const candidate of candidates) {
+    if (!(await usernameTaken(candidate))) return candidate;
+  }
+  const base = candidates[0];
+  let i = 2;
+  while (await usernameTaken(`${base}${i}`)) i++;
+  return `${base}${i}`;
+}
+
+// Cria a região e o usuário/login vinculado automaticamente (login a partir do nome do responsável)
 export async function createRegion(data) {
   const regRef = await addDoc(collection(db, 'regions'), {
     name: data.name, responsible: data.responsible || '', responsiblePhone: data.responsiblePhone || '',
     competitionCategory: data.competitionCategory, active: true
   });
-  const username = await generateRegionUsername(data.name, data.competitionCategory);
+  const username = await generateUsernameFromName(data.responsible || data.name);
   const password = data.password || genPassword();
   await addDoc(collection(db, 'users'), {
     name: data.name, phone: data.responsiblePhone || '', username, password,

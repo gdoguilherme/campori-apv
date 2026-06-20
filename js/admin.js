@@ -18,7 +18,7 @@ const S = {
   filterStatus: 'Todos',
   rankingCat: 'Todos',
   editingReq: null, editingUser: null, editingRegion: null,
-  formRole: 'approver', generatedPwd: '', createdRegionCreds: null,
+  formRole: null, generatedPwd: '', createdCreds: null,
   photoUrl: null, modal: null,
   loading: false,
 };
@@ -98,7 +98,7 @@ function render() {
   if (S.modal === 'req-form')            html += mReqForm();
   else if (S.modal === 'user-form')      html += mUserForm();
   else if (S.modal === 'region-form')    html += mRegionForm();
-  else if (S.modal === 'region-created') html += mRegionCreated();
+  else if (S.modal === 'credentials')    html += mCredentialsModal();
   else if (S.modal === 'photo')          html += mPhoto();
   else if (S.modal === 'change-password') html += mChangePassword();
   el.innerHTML = html;
@@ -672,7 +672,8 @@ function mUserForm() {
   const u           = S.editingUser;
   const isEdit      = !!u?.id;
   const roleOptions = Object.entries(ROLES).filter(([k]) => k !== 'region');
-  const role        = S.formRole || u?.role || roleOptions[0][0];
+  const role        = S.formRole || u?.role || null;
+  const showRest    = isEdit || !!role;
   const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
 
   return `
@@ -680,41 +681,31 @@ function mUserForm() {
     <div class="modal-content" style="max-width:420px;">
       <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">${isEdit ? 'Editar' : 'Novo'} Usuário</h2>
       <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>${lbl('Perfil *')}
+          <select id="u-role" onchange="W.setFormRole(this.value)"
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
+            ${!isEdit ? `<option value="" disabled ${!role ? 'selected' : ''}>Selecione o perfil...</option>` : ''}
+            ${roleOptions.map(([k, v]) => `<option value="${k}" ${role === k ? 'selected' : ''}>${v}</option>`).join('')}
+          </select>
+        </div>
+        ${showRest ? `
         <div>${lbl('Nome completo *')}<input id="u-name" type="text" value="${u?.name || ''}" placeholder="João Silva"
           style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
         <div>${lbl('Telefone')}<input id="u-phone" type="tel" value="${u?.phone || ''}" placeholder="(11) 99999-9999"
           style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
-        ${!isEdit
-          ? `<div>${lbl('Usuário (login) *')}<input id="u-username" type="text" value="${u?.username || ''}" placeholder="joao.silva"
-              style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;text-transform:lowercase;"></div>`
-          : `<div style="background:#f8fafc;border-radius:.875rem;padding:.75rem;font-size:.85rem;color:#64748b;">Usuário: <strong>@${u?.username}</strong></div>`}
-        <div>${lbl('Perfil *')}
-          <select id="u-role" onchange="W.setFormRole(this.value)"
-            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
-            ${roleOptions.map(([k, v]) => `<option value="${k}" ${role === k ? 'selected' : ''}>${v}</option>`).join('')}
-          </select>
-        </div>
+        ${isEdit
+          ? `<div style="background:#f8fafc;border-radius:.875rem;padding:.75rem;font-size:.85rem;color:#64748b;">Usuário: <strong>@${u?.username}</strong></div>`
+          : `<div style="background:#f8fafc;border-radius:.875rem;padding:.75rem 1rem;font-size:.8rem;color:#64748b;">🔑 Login e senha serão gerados automaticamente a partir do nome</div>`}
         ${role === 'judge' ? `
           <div>${lbl('Categoria *')}<select id="u-cat"
             style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
             <option value="">Todas as categorias</option>
             ${CATEGORIES.map(c => `<option value="${c}" ${u?.judgeCategory === c ? 'selected' : ''}>${c}</option>`).join('')}
           </select></div>` : ''}
-        ${!isEdit ? `
-          <div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:.875rem;padding:.875rem;">
-            <div style="font-size:.82rem;font-weight:700;color:#166534;margin-bottom:.375rem;">🔑 Senha gerada automaticamente</div>
-            <div style="display:flex;align-items:center;gap:.75rem;">
-              <input id="u-pwd" type="text" value="${S.generatedPwd}"
-                style="flex:1;border:1.5px solid #bbf7d0;border-radius:.625rem;padding:.625rem;font-size:1rem;font-weight:700;letter-spacing:.1rem;background:#fff;outline:none;">
-              <button onclick="W.regenPwd()"
-                style="background:#166534;border:none;color:#fff;padding:.625rem .875rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔄</button>
-            </div>
-            <div style="font-size:.75rem;color:#16a34a;margin-top:.375rem;">Anote e repasse ao usuário</div>
-          </div>` : ''}
         <button onclick="W.saveUser()" ${S.loading ? 'disabled' : ''}
           style="width:100%;background:#166534;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
           ${S.loading ? '⏳ Salvando...' : (isEdit ? '💾 Salvar' : '+ Criar Usuário')}
-        </button>
+        </button>` : ''}
       </div>
       <button onclick="W.closeModal()"
         style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
@@ -776,7 +767,7 @@ function mRegionForm() {
           <div style="font-size:.75rem;color:#64748b;margin-top:.375rem;">Senha atual do login da região</div>
         </div>` : `
         <div style="background:#f8fafc;border-radius:.875rem;padding:.75rem 1rem;font-size:.8rem;color:#64748b;">
-          🔑 Login e senha serão gerados automaticamente ao salvar
+          🔑 Login e senha serão gerados automaticamente a partir do nome do responsável
         </div>`}
         ${isEdit ? `
         <div style="display:flex;align-items:center;gap:.75rem;">
@@ -794,26 +785,29 @@ function mRegionForm() {
   </div>`;
 }
 
-// ── MODAL: REGIÃO CRIADA (credenciais) ────────────────────────
-function mRegionCreated() {
-  const { username, password } = S.createdRegionCreds || {};
+// ── MODAL: CREDENCIAIS GERADAS (região ou usuário) ─────────────
+function mCredentialsModal() {
+  const { title, username, password } = S.createdCreds || {};
+  const row = (label, value, field) => `
+    <div>
+      <div style="font-size:.72rem;font-weight:700;color:#166534;">${label}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;">
+        <span style="font-size:1.05rem;font-weight:800;letter-spacing:${field === 'password' ? '.1rem' : '0'};color:#1e293b;">${value}</span>
+        <button onclick="W.copyCred('${field}')"
+          style="background:#166534;border:none;color:#fff;padding:.4rem .7rem;border-radius:.5rem;font-size:.72rem;font-weight:700;cursor:pointer;flex-shrink:0;">📋 Copiar</button>
+      </div>
+    </div>`;
   return `
-  <div class="modal-overlay center" onclick="if(event.target===this)W.closeRegionCreated()">
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeCredentials()">
     <div class="modal-content" style="max-width:380px;text-align:center;">
       <div style="font-size:2.5rem;margin-bottom:.5rem;">✅</div>
-      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 .375rem;">Região criada!</h2>
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 .375rem;">${title || 'Criado com sucesso!'}</h2>
       <p style="font-size:.85rem;color:#64748b;margin:0 0 1.25rem;">Anote as credenciais de acesso:</p>
       <div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:.875rem;padding:1rem;text-align:left;margin-bottom:1.25rem;display:flex;flex-direction:column;gap:.75rem;">
-        <div>
-          <div style="font-size:.72rem;font-weight:700;color:#166534;">Usuário</div>
-          <div style="font-size:1.05rem;font-weight:800;color:#1e293b;">@${username}</div>
-        </div>
-        <div>
-          <div style="font-size:.72rem;font-weight:700;color:#166534;">Senha</div>
-          <div style="font-size:1.05rem;font-weight:800;letter-spacing:.1rem;color:#1e293b;">${password}</div>
-        </div>
+        ${row('Usuário', `@${username}`, 'username')}
+        ${row('Senha', password, 'password')}
       </div>
-      <button onclick="W.closeRegionCreated()"
+      <button onclick="W.closeCredentials()"
         style="width:100%;background:#166534;color:#fff;border:none;padding:1rem;border-radius:1rem;font-size:.95rem;font-weight:800;cursor:pointer;">Fechar</button>
     </div>
   </div>`;
@@ -866,7 +860,14 @@ window.W = {
 
   setTab(tab)      { S.adminTab = tab; render(); },
   closeModal()     { S.modal = null; render(); },
-  closeRegionCreated() { S.modal = null; S.createdRegionCreds = null; render(); },
+  closeCredentials() { S.modal = null; S.createdCreds = null; render(); },
+  copyCred(field) {
+    const text = S.createdCreds?.[field];
+    if (!text) return;
+    navigator.clipboard?.writeText(text)
+      .then(() => toast('Copiado! 📋'))
+      .catch(() => toast('Não foi possível copiar', 'error'));
+  },
   openChangePwd()  { S.modal = 'change-password'; render(); },
   openPhoto(url)   { S.photoUrl = url; S.modal = 'photo'; render(); },
   filterStatus(st) { S.filterStatus = st; render(); },
@@ -952,7 +953,7 @@ window.W = {
   // ── Usuários ───────────────────────────────────────────────
   openUserForm(id) {
     S.editingUser  = id ? S.users.find(u => u.id === id) : null;
-    S.formRole     = S.editingUser?.role || 'approver';
+    S.formRole     = S.editingUser?.role || null;
     S.generatedPwd = genPassword();
     S.modal = 'user-form'; render();
   },
@@ -961,12 +962,10 @@ window.W = {
   async saveUser() {
     const name     = document.getElementById('u-name')?.value?.trim();
     const phone    = document.getElementById('u-phone')?.value?.trim();
-    const username = document.getElementById('u-username')?.value?.trim().toLowerCase();
     const role     = document.getElementById('u-role')?.value;
     const judgeCat = document.getElementById('u-cat')?.value || null;
     const pwd      = document.getElementById('u-pwd')?.value || S.generatedPwd;
     if (!name || !role) { toast('Nome e perfil são obrigatórios', 'error'); return; }
-    if (!S.editingUser && !username) { toast('Usuário é obrigatório', 'error'); return; }
     S.loading = true; render();
     try {
       if (S.editingUser) {
@@ -975,15 +974,16 @@ window.W = {
           judgeCategory: judgeCat || null
         });
         toast('Usuário atualizado! ✅');
+        S.modal = null; S.editingUser = null;
       } else {
-        await createUser({
-          name, phone: phone || '', username, password: pwd, role,
+        const { username } = await createUser({
+          name, phone: phone || '', password: pwd, role,
           judgeCategory: judgeCat || null
         }, S.user);
-        toast(`✅ Usuário criado! Senha: ${pwd}`);
-        setTimeout(() => alert(`Usuário: ${username}\nSenha: ${pwd}\n\nAnote antes de fechar!`), 300);
+        S.createdCreds = { title: 'Usuário criado!', username, password: pwd };
+        S.modal = 'credentials';
+        S.editingUser = null;
       }
-      S.modal = null; S.editingUser = null;
     } catch (e) { toast(e.message, 'error'); }
     S.loading = false; render();
   },
@@ -1031,9 +1031,9 @@ window.W = {
           name, responsible: responsible || '', responsiblePhone: phone || '',
           competitionCategory: compCat, password: pwd
         });
-        S.createdRegionCreds = { username, password };
+        S.createdCreds = { title: 'Região criada!', username, password };
         S.editingRegion = null;
-        S.modal = 'region-created';
+        S.modal = 'credentials';
       }
     } catch (e) { toast(e.message || 'Erro ao salvar.', 'error'); }
     S.loading = false; render();

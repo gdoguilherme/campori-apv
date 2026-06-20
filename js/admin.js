@@ -18,7 +18,7 @@ const S = {
   filterStatus: 'Todos',
   rankingCat: 'Todos',
   editingReq: null, editingUser: null, editingRegion: null,
-  formRole: 'approver', generatedPwd: '',
+  formRole: 'approver', generatedPwd: '', createdRegionCreds: null,
   photoUrl: null, modal: null,
   loading: false,
 };
@@ -98,6 +98,7 @@ function render() {
   if (S.modal === 'req-form')            html += mReqForm();
   else if (S.modal === 'user-form')      html += mUserForm();
   else if (S.modal === 'region-form')    html += mRegionForm();
+  else if (S.modal === 'region-created') html += mRegionCreated();
   else if (S.modal === 'photo')          html += mPhoto();
   else if (S.modal === 'change-password') html += mChangePassword();
   el.innerHTML = html;
@@ -774,15 +775,8 @@ function mRegionForm() {
           </div>
           <div style="font-size:.75rem;color:#64748b;margin-top:.375rem;">Senha atual do login da região</div>
         </div>` : `
-        <div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:.875rem;padding:.875rem;">
-          <div style="font-size:.82rem;font-weight:700;color:#166534;margin-bottom:.375rem;">🔑 Login gerado automaticamente · senha:</div>
-          <div style="display:flex;align-items:center;gap:.75rem;">
-            <input id="reg-pwd" type="text" value="${S.generatedPwd}"
-              style="flex:1;border:1.5px solid #bbf7d0;border-radius:.625rem;padding:.625rem;font-size:1rem;font-weight:700;letter-spacing:.1rem;background:#fff;outline:none;">
-            <button onclick="W.regenPwd()"
-              style="background:#166534;border:none;color:#fff;padding:.625rem .875rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔄</button>
-          </div>
-          <div style="font-size:.75rem;color:#16a34a;margin-top:.375rem;">Anote e repasse ao responsável da região</div>
+        <div style="background:#f8fafc;border-radius:.875rem;padding:.75rem 1rem;font-size:.8rem;color:#64748b;">
+          🔑 Login e senha serão gerados automaticamente ao salvar
         </div>`}
         ${isEdit ? `
         <div style="display:flex;align-items:center;gap:.75rem;">
@@ -796,6 +790,31 @@ function mRegionForm() {
       </div>
       <button onclick="W.closeModal()"
         style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: REGIÃO CRIADA (credenciais) ────────────────────────
+function mRegionCreated() {
+  const { username, password } = S.createdRegionCreds || {};
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeRegionCreated()">
+    <div class="modal-content" style="max-width:380px;text-align:center;">
+      <div style="font-size:2.5rem;margin-bottom:.5rem;">✅</div>
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 .375rem;">Região criada!</h2>
+      <p style="font-size:.85rem;color:#64748b;margin:0 0 1.25rem;">Anote as credenciais de acesso:</p>
+      <div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:.875rem;padding:1rem;text-align:left;margin-bottom:1.25rem;display:flex;flex-direction:column;gap:.75rem;">
+        <div>
+          <div style="font-size:.72rem;font-weight:700;color:#166534;">Usuário</div>
+          <div style="font-size:1.05rem;font-weight:800;color:#1e293b;">@${username}</div>
+        </div>
+        <div>
+          <div style="font-size:.72rem;font-weight:700;color:#166534;">Senha</div>
+          <div style="font-size:1.05rem;font-weight:800;letter-spacing:.1rem;color:#1e293b;">${password}</div>
+        </div>
+      </div>
+      <button onclick="W.closeRegionCreated()"
+        style="width:100%;background:#166534;color:#fff;border:none;padding:1rem;border-radius:1rem;font-size:.95rem;font-weight:800;cursor:pointer;">Fechar</button>
     </div>
   </div>`;
 }
@@ -847,6 +866,7 @@ window.W = {
 
   setTab(tab)      { S.adminTab = tab; render(); },
   closeModal()     { S.modal = null; render(); },
+  closeRegionCreated() { S.modal = null; S.createdRegionCreds = null; render(); },
   openChangePwd()  { S.modal = 'change-password'; render(); },
   openPhoto(url)   { S.photoUrl = url; S.modal = 'photo'; render(); },
   filterStatus(st) { S.filterStatus = st; render(); },
@@ -1011,9 +1031,9 @@ window.W = {
           name, responsible: responsible || '', responsiblePhone: phone || '',
           competitionCategory: compCat, password: pwd
         });
-        toast(`✅ Região criada! Login: ${username}`);
-        setTimeout(() => alert(`Login da região: ${username}\nSenha: ${password}\n\nAnote antes de fechar!`), 300);
-        S.modal = null; S.editingRegion = null;
+        S.createdRegionCreds = { username, password };
+        S.editingRegion = null;
+        S.modal = 'region-created';
       }
     } catch (e) { toast(e.message || 'Erro ao salvar.', 'error'); }
     S.loading = false; render();

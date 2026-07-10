@@ -8,7 +8,7 @@ import {
   createRegion as apiCreateRegion, updateRegion as apiUpdateRegion, delRegion as apiDelRegion,
   createParticipant, updateParticipant, deleteParticipant as apiDeleteParticipant, createParticipantsBulk,
   createUnit, updateUnit, deleteUnit as apiDeleteUnit, allocateParticipant,
-  computeScores,
+  computeUnitScores,
   CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS, AREAS_ATUACAO, FILLED_BY
 } from './api.js';
 
@@ -19,7 +19,6 @@ const S = {
   sidebarOpen: false,
   requirements: [], submissions: [], users: [], regions: [], participants: [], units: [],
   filterStatus: 'Todos',
-  rankingCat: 'Todos',
   participantFilterRegion: 'Todas', participantFilterCat: 'Todos',
   unitFilterRegion: 'Todas', unitParticipantSearch: '', counselorUnitId: null,
   editingReq: null, editingUser: null, editingRegion: null, editingParticipant: null, editingUnit: null,
@@ -86,9 +85,9 @@ function exportExcel() {
     'Observações': s.notes || ''
   }));
   window.XLSX.utils.book_append_sheet(wb, window.XLSX.utils.json_to_sheet(rows), 'Comprovações');
-  const sc = computeScores(S.submissions, S.requirements, S.users);
+  const sc = computeUnitScores(S.submissions, S.units);
   window.XLSX.utils.book_append_sheet(wb, window.XLSX.utils.json_to_sheet(
-    sc.map((s, i) => ({ 'Posição': i + 1, 'Região': s.name, 'Pontos Totais': s.total, 'Aprovações': s.count }))
+    sc.map((s, i) => ({ 'Posição': i + 1, 'Unidade': s.name, 'Região': rname(s.regionId), 'Pontos Totais': s.total, 'Aprovações': s.count }))
   ), 'Ranking');
   window.XLSX.writeFile(wb, `campori-${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
@@ -365,12 +364,26 @@ function tHistory() {
 
 // ── TAB: DASHBOARD ────────────────────────────────────────────
 function tDashboard() {
-  const scores   = computeScores(S.submissions, S.requirements, S.users);
+  const scores   = computeUnitScores(S.submissions, S.units);
   const total    = S.submissions.length;
   const approved = S.submissions.filter(s => s.status === 'approved').length;
   const pending  = S.submissions.filter(s => s.status === 'pending').length;
   const rejected = S.submissions.filter(s => s.status === 'rejected').length;
-  const totalPts = scores.reduce((a, s) => a + s.total, 0);
+  // Soma de pontos únicos aprovados (não é a soma de scores[].total — isso duplicaria
+  // pontos de requisitos Regionais, distribuídos pra todas as unidades da região)
+  const totalPts = (() => {
+    const counted = new Set();
+    let sum = 0;
+    [...S.submissions].filter(s => s.status === 'approved')
+      .sort((a, b) => (b.submittedAt?.seconds || 0) - (a.submittedAt?.seconds || 0))
+      .forEach(s => {
+        const key = s.unitId ? `u:${s.unitId}:${s.requirementId}` : `r:${s.regionId}:${s.requirementId}`;
+        if (counted.has(key)) return;
+        counted.add(key);
+        sum += s.requirementPoints || 0;
+      });
+    return sum;
+  })();
   const maxPts   = scores[0]?.total || 1;
   const ptsByCat = {};
   S.submissions.filter(s => s.status === 'approved').forEach(s => {
@@ -407,7 +420,7 @@ function tDashboard() {
     </div>` : ''}
 
     <div class="card" style="padding:1rem;overflow:visible;">
-      <div style="font-weight:700;color:#1e293b;margin-bottom:.875rem;font-size:.9rem;">🏆 Top 10 Regiões</div>
+      <div style="font-weight:700;color:#1e293b;margin-bottom:.875rem;font-size:.9rem;">🏆 Top 10 Unidades</div>
       <div style="display:flex;flex-direction:column;gap:.5rem;">
         ${scores.slice(0, 10).map((s, i) => `
         <div>
@@ -443,30 +456,21 @@ function tDashboard() {
 }
 
 // ── TAB: RANKING ──────────────────────────────────────────────
+// Ranking único por unidade — sem separação DBV/AVT, já que as unidades são mistas.
 function tRanking() {
-  const cat    = S.rankingCat;
-  const scores = computeScores(S.submissions, S.requirements, S.users, cat);
+  const scores = computeUnitScores(S.submissions, S.units);
   const max    = scores[0]?.total || 1;
   const top3   = scores.filter(s => s.total > 0).slice(0, 3);
 
   return `
   <div>
-    <div style="display:flex;justify-content:center;margin-bottom:1rem;">
-      <div style="display:inline-flex;gap:.375rem;background:#f1f5f9;border-radius:999px;padding:.25rem;">
-        ${['Todos', 'DBV', 'AVT'].map(c => `
-        <button onclick="W.setRankingCat('${c}')"
-          style="padding:.375rem .875rem;border-radius:999px;border:none;font-size:.8rem;font-weight:700;cursor:pointer;
-          background:${cat === c ? '#0D2B6E' : 'transparent'};
-          color:${cat === c ? '#fff' : '#64748b'};">${c}</button>`).join('')}
-      </div>
-    </div>
-
     ${top3.length >= 3 ? `
     <div style="display:flex;align-items:flex-end;gap:.75rem;margin-bottom:1.25rem;">
       <div style="flex:1;text-align:center;">
         <div style="font-size:1.75rem;margin-bottom:.375rem;">🥈</div>
         <div style="background:#e2e8f0;border-radius:.875rem .875rem 0 0;padding:.75rem .5rem 1rem;min-height:5rem;display:flex;flex-direction:column;justify-content:flex-end;">
           <div style="font-weight:800;color:#1e293b;font-size:.8rem;">${top3[1]?.name}</div>
+          <div style="color:#94a3b8;font-size:.65rem;">${rname(top3[1]?.regionId)}</div>
           <div style="color:#64748b;font-size:.75rem;font-weight:600;">${top3[1]?.total} pts</div>
         </div>
       </div>
@@ -474,6 +478,7 @@ function tRanking() {
         <div style="font-size:2.25rem;margin-bottom:.375rem;">🥇</div>
         <div style="background:#fef3c7;border-radius:.875rem .875rem 0 0;padding:.75rem .5rem 1rem;min-height:7rem;display:flex;flex-direction:column;justify-content:flex-end;">
           <div style="font-weight:800;color:#1e293b;font-size:.85rem;">${top3[0]?.name}</div>
+          <div style="color:#94a3b8;font-size:.65rem;">${rname(top3[0]?.regionId)}</div>
           <div style="color:#D4A017;font-size:.8rem;font-weight:800;">${top3[0]?.total} pts</div>
         </div>
       </div>
@@ -481,6 +486,7 @@ function tRanking() {
         <div style="font-size:1.75rem;margin-bottom:.375rem;">🥉</div>
         <div style="background:#fee2e2;border-radius:.875rem .875rem 0 0;padding:.75rem .5rem 1rem;min-height:3.5rem;display:flex;flex-direction:column;justify-content:flex-end;">
           <div style="font-weight:800;color:#1e293b;font-size:.8rem;">${top3[2]?.name}</div>
+          <div style="color:#94a3b8;font-size:.65rem;">${rname(top3[2]?.regionId)}</div>
           <div style="color:#dc2626;font-size:.75rem;font-weight:600;">${top3[2]?.total} pts</div>
         </div>
       </div>
@@ -498,7 +504,10 @@ function tRanking() {
           </div>
           <div style="flex:1;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem;">
-              <span style="font-weight:700;color:#1e293b;font-size:.9rem;">${s.name}</span>
+              <span>
+                <span style="font-weight:700;color:#1e293b;font-size:.9rem;">${s.name}</span>
+                <span style="color:#94a3b8;font-size:.72rem;"> · ${rname(s.regionId)}</span>
+              </span>
               <span style="font-weight:800;color:${s.total > 0 ? '#0D2B6E' : '#94a3b8'};font-size:.9rem;">${s.total} pts</span>
             </div>
             <div style="background:#e2e8f0;border-radius:999px;height:.4rem;">
@@ -1241,7 +1250,6 @@ window.W = {
   openChangePwd()  { S.modal = 'change-password'; render(); },
   openPhoto(url)   { S.photoUrl = url; S.modal = 'photo'; render(); },
   filterStatus(st) { S.filterStatus = st; render(); },
-  setRankingCat(c) { S.rankingCat = c; render(); },
   exportExcel()    { exportExcel(); },
 
   approve(id) { apiReview(id, 'approved', '', S.user).then(() => toast('✅ Aprovado!')); },

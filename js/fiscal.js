@@ -1,17 +1,9 @@
 import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatcher } from './auth.js';
 import {
-  subReqs, subSubs, subRegions, setRegionCache,
+  subReqs, subSubs, subRegions, setRegionCache, subUnits,
   rname, fmtDate, toast, reqFilledBy,
   doFiscalSuggestion, updatePassword, SCORE_PCTS
 } from './api.js';
-
-// Requisitos do tipo Conselheiro pontuam por unidade, não por região — o fluxo do
-// Fiscal ainda seleciona uma região (sem escolher unidade), então por enquanto ele
-// só avalia Regional/Fiscal aqui. Avaliação de Conselheiro por unidade fica pra
-// quando a distribuição de pontos por unidade for implementada (junto da seleção de unidade).
-function fiscalCanEvaluate(req) {
-  return reqFilledBy(req) !== 'conselheiro';
-}
 
 // ── ESTADO ────────────────────────────────────────────────────
 const S = {
@@ -19,13 +11,16 @@ const S = {
   requirements: [],
   submissions: [],
   regions: [],
+  units: [],
+  fiscalScopeType: null, // 'region' | 'unit'
   fiscalRegionId: null,
+  fiscalUnitId: null,
   fiscalScores: {},   // { reqId: { siId: pct } }
   modal: null,        // 'change-password'
   loading: false,
 };
 
-let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null;
+let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null, _unsubUnits = null;
 
 // ── HELPERS ───────────────────────────────────────────────────
 function isDeadlinePassed(req) {
@@ -49,6 +44,7 @@ export function init() {
   _unsubReqs    = subReqs(reqs  => { S.requirements = reqs; render(); });
   _unsubSubs    = subSubs(null, subs => { S.submissions = subs; render(); });
   _unsubRegions = subRegions(regs => { S.regions = regs; setRegionCache(regs); render(); });
+  _unsubUnits   = subUnits(units => { S.units = units; render(); });
 
   render();
 }
@@ -57,22 +53,24 @@ export function init() {
 function render() {
   const el = document.getElementById('app');
   if (!el) return;
-  let html = S.fiscalRegionId ? vScore() : vSelectRegion();
+  let html = S.fiscalScopeType ? vScore() : vSelectRegion();
   if (S.modal === 'change-password') html += mChangePassword();
   el.innerHTML = html;
 }
 
-// ── VIEW: SELECIONAR REGIÃO ────────────────────────────────────
+// ── VIEW: SELECIONAR REGIÃO OU UNIDADE ─────────────────────────
 function vSelectRegion() {
   const cat = S.user.judgeCategory;
 
-  // Requisitos que este fiscal deve avaliar
-  const evalReqs = S.requirements.filter(r =>
-    r.active !== false &&
-    (!cat || r.category === cat) &&
-    fiscalCanEvaluate(r)
+  // Requisitos Regional/Fiscal são avaliados por região; Conselheiro, por unidade
+  const evalReqsRegion = S.requirements.filter(r =>
+    r.active !== false && (!cat || r.category === cat) && reqFilledBy(r) !== 'conselheiro'
   );
-  const totalPossible = evalReqs.reduce((a, r) => a + r.points, 0);
+  const evalReqsUnit = S.requirements.filter(r =>
+    r.active !== false && (!cat || r.category === cat) && reqFilledBy(r) === 'conselheiro'
+  );
+  const totalPossible     = evalReqsRegion.reduce((a, r) => a + r.points, 0);
+  const totalPossibleUnit = evalReqsUnit.reduce((a, r) => a + r.points, 0);
 
   return `
   <div style="min-height:100dvh;background:#eef6ee;">
@@ -90,56 +88,92 @@ function vSelectRegion() {
       </div>
       <h1 style="font-size:1.3rem;font-weight:800;margin:0;">⚖️ Fiscal de Prova</h1>
       <p style="color:#cfe8ca;font-size:.85rem;margin:.25rem 0 0;">
-        ${cat ? `Categoria: ${cat}` : 'Selecione a região a avaliar'}
+        ${cat ? `Categoria: ${cat}` : 'Selecione a região ou unidade a avaliar'}
       </p>
     </div>
 
-    <div style="padding:1rem;display:grid;grid-template-columns:1fr 1fr;gap:.625rem;">
-      ${S.regions.map(reg => {
-        const fiscalSubs = S.submissions.filter(s =>
-          s.regionId === reg.id &&
-          s.source === 'judge' &&
-          (!cat || s.requirementCategory === cat)
-        );
-        const pts  = fiscalSubs.reduce((a, s) => a + (s.requirementPoints || 0), 0);
-        const done = new Set(fiscalSubs.map(s => s.requirementId)).size;
-        const pct  = totalPossible > 0 ? Math.round((pts / totalPossible) * 100) : 0;
-        return `
-        <button onclick="W.selectRegion('${reg.id}')"
-          style="padding:1rem;border:1.5px solid #e2e8f0;border-radius:1rem;text-align:left;
-          background:#fff;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.06);">
-          <div style="font-size:.7rem;color:#94a3b8;margin-bottom:.2rem;">${reg.id}</div>
-          <div style="font-weight:700;color:#1e293b;font-size:.9rem;">${reg.name}</div>
-          <div style="font-size:.75rem;color:#2D6A2A;font-weight:600;margin-top:.375rem;">
-            ${pts} / ${totalPossible} pts
-          </div>
-          ${done > 0
-            ? `<div style="font-size:.68rem;color:#94a3b8;">${done} req. avaliado${done !== 1 ? 's' : ''}</div>`
-            : ''}
-          <div style="background:#e2e8f0;border-radius:999px;height:.3rem;margin-top:.375rem;">
-            <div style="background:#2D6A2A;border-radius:999px;height:.3rem;width:${pct}%;"></div>
-          </div>
-        </button>`;
-      }).join('')}
+    <div style="padding:1rem;">
+      <div style="font-weight:800;color:#1e293b;margin-bottom:.625rem;">🗺️ Regiões <span style="font-weight:400;color:#94a3b8;font-size:.78rem;">(requisitos Regional/Fiscal)</span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.625rem;margin-bottom:1.5rem;">
+        ${S.regions.map(reg => {
+          const fiscalSubs = S.submissions.filter(s =>
+            s.regionId === reg.id && !s.unitId &&
+            s.source === 'judge' &&
+            (!cat || s.requirementCategory === cat)
+          );
+          const pts  = fiscalSubs.reduce((a, s) => a + (s.requirementPoints || 0), 0);
+          const done = new Set(fiscalSubs.map(s => s.requirementId)).size;
+          const pct  = totalPossible > 0 ? Math.round((pts / totalPossible) * 100) : 0;
+          return `
+          <button onclick="W.selectScope('region','${reg.id}')"
+            style="padding:1rem;border:1.5px solid #e2e8f0;border-radius:1rem;text-align:left;
+            background:#fff;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+            <div style="font-weight:700;color:#1e293b;font-size:.9rem;">${reg.name}</div>
+            <div style="font-size:.75rem;color:#2D6A2A;font-weight:600;margin-top:.375rem;">
+              ${pts} / ${totalPossible} pts
+            </div>
+            ${done > 0
+              ? `<div style="font-size:.68rem;color:#94a3b8;">${done} req. avaliado${done !== 1 ? 's' : ''}</div>`
+              : ''}
+            <div style="background:#e2e8f0;border-radius:999px;height:.3rem;margin-top:.375rem;">
+              <div style="background:#2D6A2A;border-radius:999px;height:.3rem;width:${pct}%;"></div>
+            </div>
+          </button>`;
+        }).join('')}
+      </div>
+
+      ${evalReqsUnit.length > 0 ? `
+      <div style="font-weight:800;color:#1e293b;margin-bottom:.625rem;">🏕️ Unidades <span style="font-weight:400;color:#94a3b8;font-size:.78rem;">(requisitos Conselheiro)</span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.625rem;">
+        ${S.units.length === 0
+          ? `<p style="grid-column:1/-1;color:#94a3b8;font-size:.85rem;">Nenhuma unidade cadastrada ainda.</p>`
+          : S.units.map(u => {
+            const fiscalSubs = S.submissions.filter(s =>
+              s.unitId === u.id &&
+              s.source === 'judge' &&
+              (!cat || s.requirementCategory === cat)
+            );
+            const pts  = fiscalSubs.reduce((a, s) => a + (s.requirementPoints || 0), 0);
+            const done = new Set(fiscalSubs.map(s => s.requirementId)).size;
+            const pct  = totalPossibleUnit > 0 ? Math.round((pts / totalPossibleUnit) * 100) : 0;
+            return `
+            <button onclick="W.selectScope('unit','${u.id}')"
+              style="padding:1rem;border:1.5px solid #e2e8f0;border-radius:1rem;text-align:left;
+              background:#fff;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+              <div style="font-weight:700;color:#1e293b;font-size:.9rem;">${u.name}</div>
+              <div style="font-size:.68rem;color:#94a3b8;">${rname(u.regionId)}</div>
+              <div style="font-size:.75rem;color:#2D6A2A;font-weight:600;margin-top:.375rem;">
+                ${pts} / ${totalPossibleUnit} pts
+              </div>
+              ${done > 0
+                ? `<div style="font-size:.68rem;color:#94a3b8;">${done} req. avaliado${done !== 1 ? 's' : ''}</div>`
+                : ''}
+              <div style="background:#e2e8f0;border-radius:999px;height:.3rem;margin-top:.375rem;">
+                <div style="background:#2D6A2A;border-radius:999px;height:.3rem;width:${pct}%;"></div>
+              </div>
+            </button>`;
+          }).join('')}
+      </div>` : ''}
     </div>
   </div>`;
 }
 
-// ── VIEW: AVALIAR REGIÃO ──────────────────────────────────────
+// ── VIEW: AVALIAR REGIÃO OU UNIDADE ────────────────────────────
 function vScore() {
-  const cat = S.user.judgeCategory;
-  const reg = S.regions.find(r => r.id === S.fiscalRegionId);
+  const cat    = S.user.judgeCategory;
+  const isUnit = S.fiscalScopeType === 'unit';
+  const scope  = isUnit ? S.units.find(u => u.id === S.fiscalUnitId) : S.regions.find(r => r.id === S.fiscalRegionId);
 
   const reqs = S.requirements.filter(r =>
     r.active !== false &&
     (!cat || r.category === cat) &&
-    fiscalCanEvaluate(r)
+    (isUnit ? reqFilledBy(r) === 'conselheiro' : reqFilledBy(r) !== 'conselheiro')
   );
 
-  // Sugestões existentes do fiscal para esta região
+  // Sugestões existentes do fiscal para este escopo (região ou unidade)
   const existingMap = {};
   S.submissions
-    .filter(s => s.regionId === S.fiscalRegionId && s.source === 'judge')
+    .filter(s => s.source === 'judge' && (isUnit ? s.unitId === S.fiscalUnitId : (s.regionId === S.fiscalRegionId && !s.unitId)))
     .forEach(s => { existingMap[s.requirementId] = s; });
 
   return `
@@ -147,12 +181,12 @@ function vScore() {
     <div style="background:linear-gradient(135deg,#1d4a1a,#2D6A2A);color:#fff;padding:1rem 1rem 1.5rem;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;">
         <div>
-          <button onclick="W.selectRegion(null)"
+          <button onclick="W.selectScope(null)"
             style="background:none;border:none;color:#cfe8ca;cursor:pointer;
-            font-size:.85rem;display:block;margin-bottom:.25rem;padding:0;">← Regiões</button>
-          <h1 style="font-size:1.25rem;font-weight:800;margin:0;">⚖️ ${reg?.name || S.fiscalRegionId}</h1>
+            font-size:.85rem;display:block;margin-bottom:.25rem;padding:0;">← Voltar</button>
+          <h1 style="font-size:1.25rem;font-weight:800;margin:0;">⚖️ ${scope?.name || (isUnit ? S.fiscalUnitId : S.fiscalRegionId)}</h1>
           <p style="color:#cfe8ca;font-size:.82rem;margin:.25rem 0 0;">
-            ${cat ? `Categoria: ${cat}` : 'Fiscal de Prova'}
+            ${isUnit ? `${rname(scope?.regionId)} · ` : ''}${cat ? `Categoria: ${cat}` : 'Fiscal de Prova'}
           </p>
         </div>
         <div style="display:flex;gap:.5rem;align-items:center;padding-top:.25rem;">
@@ -323,15 +357,19 @@ window.W = {
     if (_unsubReqs)    _unsubReqs();
     if (_unsubSubs)    _unsubSubs();
     if (_unsubRegions) _unsubRegions();
+    if (_unsubUnits)   _unsubUnits();
     authLogout();
   },
 
   closeModal()   { S.modal = null; render(); },
   openChangePwd(){ S.modal = 'change-password'; render(); },
 
-  selectRegion(id) {
-    S.fiscalRegionId = id;
-    S.fiscalScores   = {};
+  // type: 'region' | 'unit' | null (null volta pra tela de seleção)
+  selectScope(type, id) {
+    S.fiscalScopeType = type;
+    S.fiscalRegionId  = type === 'region' ? id : null;
+    S.fiscalUnitId    = type === 'unit' ? id : null;
+    S.fiscalScores    = {};
     render();
   },
 
@@ -345,8 +383,10 @@ window.W = {
     const req = S.requirements.find(r => r.id === reqId);
     if (!req) return;
     if (isDeadlinePassed(req)) { toast('Prazo para este requisito foi encerrado', 'error'); return; }
+    const isUnit = S.fiscalScopeType === 'unit';
     const existing = S.submissions.find(s =>
-      s.regionId === S.fiscalRegionId && s.requirementId === reqId && s.source === 'judge'
+      s.requirementId === reqId && s.source === 'judge' &&
+      (isUnit ? s.unitId === S.fiscalUnitId : (s.regionId === S.fiscalRegionId && !s.unitId))
     );
     const subItems  = req.subItems || [];
     const curScores = S.fiscalScores[reqId] || {};
@@ -368,9 +408,10 @@ window.W = {
 
     if (!allSet) { toast('Avalie todos os sub-itens antes de confirmar', 'error'); return; }
 
+    const regionId = isUnit ? S.units.find(u => u.id === S.fiscalUnitId)?.regionId : S.fiscalRegionId;
     S.loading = true; render();
     try {
-      await doFiscalSuggestion(req, S.fiscalRegionId, total, subItemScores, subItemPcts, S.user, existing?.id || null);
+      await doFiscalSuggestion(req, regionId, total, subItemScores, subItemPcts, S.user, existing?.id || null, isUnit ? S.fiscalUnitId : null);
       delete S.fiscalScores[reqId];
     } catch (e) {
       toast('Erro ao salvar. Tente novamente.', 'error');
@@ -382,15 +423,18 @@ window.W = {
     const req = S.requirements.find(r => r.id === reqId);
     if (!req) return;
     if (isDeadlinePassed(req)) { toast('Prazo para este requisito foi encerrado', 'error'); return; }
+    const isUnit = S.fiscalScopeType === 'unit';
     const existing = S.submissions.find(s =>
-      s.regionId === S.fiscalRegionId && s.requirementId === reqId && s.source === 'judge'
+      s.requirementId === reqId && s.source === 'judge' &&
+      (isUnit ? s.unitId === S.fiscalUnitId : (s.regionId === S.fiscalRegionId && !s.unitId))
     );
     const pts = parseInt(document.getElementById(`pts-${reqId}`)?.value) || 0;
     if (pts < 0 || pts > req.points) { toast(`Valor entre 0 e ${req.points}`, 'error'); return; }
 
+    const regionId = isUnit ? S.units.find(u => u.id === S.fiscalUnitId)?.regionId : S.fiscalRegionId;
     S.loading = true; render();
     try {
-      await doFiscalSuggestion(req, S.fiscalRegionId, pts, null, null, S.user, existing?.id || null);
+      await doFiscalSuggestion(req, regionId, pts, null, null, S.user, existing?.id || null, isUnit ? S.fiscalUnitId : null);
     } catch (e) {
       toast('Erro ao salvar. Tente novamente.', 'error');
     }

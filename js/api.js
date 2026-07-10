@@ -252,7 +252,7 @@ export async function review(subId, status, reason, currentUser) {
 
 // V3: fiscal cria/atualiza sugestão pending (admin aprova)
 // existingSubId: id da submission existente do fiscal para esta região+req, ou null
-export async function doFiscalSuggestion(req, regionId, totalPts, subItemScores, subItemPcts, currentUser, existingSubId) {
+export async function doFiscalSuggestion(req, regionId, totalPts, subItemScores, subItemPcts, currentUser, existingSubId, unitId = null) {
   const baseData = {
     requirementPoints: totalPts,
     subItemScores: subItemScores || null,
@@ -269,6 +269,7 @@ export async function doFiscalSuggestion(req, regionId, totalPts, subItemScores,
   } else {
     await addDoc(collection(db, 'submissions'), {
       regionId, regionName: rname(regionId),
+      unitId: unitId || null, // presente quando o fiscal avalia um requisito tipo Conselheiro
       requirementId: req.id, requirementName: req.name,
       requirementCategory: req.category,
       competitionCategory: req.competitionCategory || 'Ambos',
@@ -444,30 +445,40 @@ export async function uploadFile(file, regionId, reqCode) {
 
 // ── SCORING ───────────────────────────────────────────────────
 
-export function computeScores(submissions, requirements, users, catFilter = 'Todos') {
+// Pontuação por UNIDADE (substitui o antigo computeScores por região):
+// - submission sem unitId (enviada/aprovada pela região, ou avaliada pelo Fiscal
+//   no nível da região) → pontua TODAS as unidades daquela região
+// - submission com unitId (enviada pelo Conselheiro, ou avaliada pelo Fiscal
+//   no nível da unidade) → pontua só aquela unidade
+// Unidades são mistas (sem separação DBV/AVT) — não há catFilter aqui.
+export function computeUnitScores(submissions, units) {
   const scores = {};
-  _regionCache.forEach(r => { scores[r.id] = { name: r.name, total: 0, count: 0, compCat: r.competitionCategory || null }; });
-  users.forEach(u => {
-    if (u.role === 'region' && u.regionId && u.competitionCategory && scores[u.regionId])
-      scores[u.regionId].compCat = u.competitionCategory;
-  });
+  units.forEach(u => { scores[u.id] = { name: u.name, regionId: u.regionId, total: 0, count: 0 }; });
+
   const counted = new Set();
   [...submissions]
     .filter(s => s.status === 'approved')
     .sort((a, b) => (b.submittedAt?.seconds || 0) - (a.submittedAt?.seconds || 0))
     .forEach(s => {
-      if (!scores[s.regionId]) return;
-      const key = `${s.regionId}:${s.requirementId}`;
-      if (counted.has(key)) return;
-      const req = requirements.find(r => r.id === s.requirementId);
-      const reqCat = req?.competitionCategory || 'Ambos';
-      if (catFilter === 'Todos' || reqCat === 'Ambos' || reqCat === catFilter) {
+      if (s.unitId) {
+        if (!scores[s.unitId]) return;
+        const key = `${s.unitId}:${s.requirementId}`;
+        if (counted.has(key)) return;
         counted.add(key);
-        scores[s.regionId].total += s.requirementPoints || 0;
-        scores[s.regionId].count++;
+        scores[s.unitId].total += s.requirementPoints || 0;
+        scores[s.unitId].count++;
+      } else {
+        const regionUnits = units.filter(u => u.regionId === s.regionId);
+        if (regionUnits.length === 0) return;
+        const key = `${s.regionId}:${s.requirementId}`;
+        if (counted.has(key)) return;
+        counted.add(key);
+        regionUnits.forEach(u => {
+          scores[u.id].total += s.requirementPoints || 0;
+          scores[u.id].count++;
+        });
       }
     });
-  let result = Object.entries(scores).map(([id, v]) => ({ id, ...v })).sort((a, b) => b.total - a.total);
-  if (catFilter !== 'Todos') result = result.filter(r => !r.compCat || r.compCat === catFilter);
-  return result;
+
+  return Object.entries(scores).map(([id, v]) => ({ id, ...v })).sort((a, b) => b.total - a.total);
 }

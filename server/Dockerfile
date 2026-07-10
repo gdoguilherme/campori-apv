@@ -9,7 +9,9 @@ RUN npm ci --only=production
 COPY server.js ./
 COPY routes/ ./routes/
 COPY services/ ./services/
-# credentials.json NÃO é copiado — vem via env var GOOGLE_CREDENTIALS_JSON no Fly.io
+COPY middleware/ ./middleware/
+# credentials.json e firebase-credentials.json NÃO são copiados — vêm via env vars
+# GOOGLE_CREDENTIALS_JSON / FIREBASE_CREDENTIALS_JSON no Fly.io
 
 ENV PORT=8080
 EXPOSE 8080

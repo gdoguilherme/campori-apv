@@ -1,6 +1,6 @@
-import { guardPage, logout as authLogout, saveSession, startExpiryWatcher } from './auth.js';
+import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatcher } from './auth.js';
 import {
-  subReqs, subSubs, rname, fmtDate, toast, showBanner,
+  subReqs, subSubs, subRegions, setRegionCache, rname, fmtDate, toast, showBanner,
   addSubmission, uploadFile, updateSubmissionProof, updatePassword,
   CATEGORIES
 } from './api.js';
@@ -39,7 +39,7 @@ const S = {
   loading: false,
 };
 
-let _unsubReqs = null, _unsubSubs = null;
+let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null;
 
 // ── INIT ──────────────────────────────────────────────────────
 export function init(theme) {
@@ -58,8 +58,9 @@ export function init(theme) {
   S.user = user;
   startExpiryWatcher();
 
-  _unsubReqs = subReqs(reqs => { S.requirements = reqs; render(); });
-  _unsubSubs = subSubs(user.regionId, subs => { S.submissions = subs; render(); });
+  _unsubReqs    = subReqs(reqs => { S.requirements = reqs; render(); });
+  _unsubSubs    = subSubs(user.regionId, subs => { S.submissions = subs; render(); });
+  _unsubRegions = subRegions(regs => { setRegionCache(regs); render(); });
 
   render();
 }
@@ -396,6 +397,7 @@ window.W = {
   logout() {
     if (_unsubReqs) _unsubReqs();
     if (_unsubSubs) _unsubSubs();
+    if (_unsubRegions) _unsubRegions();
     authLogout();
   },
 
@@ -464,19 +466,17 @@ window.W = {
     const confirm = document.getElementById('pwd-confirm')?.value;
 
     if (!current || !newPwd || !confirm) { toast('Preencha todos os campos', 'error'); return; }
-    if (S.user.password !== current)     { toast('Senha atual incorreta', 'error');   return; }
     if (newPwd.length < 4)               { toast('Mínimo 4 caracteres', 'error');     return; }
     if (newPwd !== confirm)              { toast('As senhas não coincidem', 'error'); return; }
 
     S.loading = true; render();
     try {
-      await updatePassword(S.user.id, newPwd);
-      S.user = { ...S.user, password: newPwd };
+      await updatePassword(S.user.id, newPwd, getToken(), current);
       saveSession(S.user);
       toast('✅ Senha alterada com sucesso!');
       S.modal = null;
     } catch (e) {
-      toast('Erro ao alterar senha', 'error');
+      toast(e.message || 'Erro ao alterar senha', 'error');
     }
     S.loading = false; render();
   },

@@ -1,4 +1,4 @@
-import { guardPage, logout as authLogout, saveSession, startExpiryWatcher } from './auth.js';
+import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatcher } from './auth.js';
 import {
   subReqs, subSubs, subRegions, setRegionCache,
   rname, fmtDate, toast,
@@ -67,13 +67,13 @@ function vSelectRegion() {
   const totalPossible = evalReqs.reduce((a, r) => a + r.points, 0);
 
   return `
-  <div style="min-height:100dvh;background:#f5f3ff;">
-    <div style="background:linear-gradient(135deg,#4c1d95,#7c3aed);color:#fff;padding:1rem 1rem 1.5rem;">
+  <div style="min-height:100dvh;background:#eef6ee;">
+    <div style="background:linear-gradient(135deg,#1d4a1a,#2D6A2A);color:#fff;padding:1rem 1rem 1.5rem;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;">
-        <span style="font-size:.82rem;color:#ddd6fe;">👤 ${S.user.name}</span>
+        <span style="font-size:.82rem;color:#cfe8ca;">👤 ${S.user.name}</span>
         <div style="display:flex;gap:.5rem;align-items:center;">
           <button onclick="W.openChangePwd()"
-            style="background:rgba(0,0,0,.2);border:none;color:#ddd6fe;
+            style="background:rgba(0,0,0,.2);border:none;color:#cfe8ca;
             padding:.375rem .75rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔑</button>
           <button onclick="W.logout()"
             style="background:rgba(0,0,0,.25);border:none;color:#fff;
@@ -81,7 +81,7 @@ function vSelectRegion() {
         </div>
       </div>
       <h1 style="font-size:1.3rem;font-weight:800;margin:0;">⚖️ Fiscal de Prova</h1>
-      <p style="color:#ddd6fe;font-size:.85rem;margin:.25rem 0 0;">
+      <p style="color:#cfe8ca;font-size:.85rem;margin:.25rem 0 0;">
         ${cat ? `Categoria: ${cat}` : 'Selecione a região a avaliar'}
       </p>
     </div>
@@ -102,14 +102,14 @@ function vSelectRegion() {
           background:#fff;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.06);">
           <div style="font-size:.7rem;color:#94a3b8;margin-bottom:.2rem;">${reg.id}</div>
           <div style="font-weight:700;color:#1e293b;font-size:.9rem;">${reg.name}</div>
-          <div style="font-size:.75rem;color:#7c3aed;font-weight:600;margin-top:.375rem;">
+          <div style="font-size:.75rem;color:#2D6A2A;font-weight:600;margin-top:.375rem;">
             ${pts} / ${totalPossible} pts
           </div>
           ${done > 0
             ? `<div style="font-size:.68rem;color:#94a3b8;">${done} req. avaliado${done !== 1 ? 's' : ''}</div>`
             : ''}
           <div style="background:#e2e8f0;border-radius:999px;height:.3rem;margin-top:.375rem;">
-            <div style="background:#7c3aed;border-radius:999px;height:.3rem;width:${pct}%;"></div>
+            <div style="background:#2D6A2A;border-radius:999px;height:.3rem;width:${pct}%;"></div>
           </div>
         </button>`;
       }).join('')}
@@ -135,21 +135,21 @@ function vScore() {
     .forEach(s => { existingMap[s.requirementId] = s; });
 
   return `
-  <div style="min-height:100dvh;background:#f5f3ff;">
-    <div style="background:linear-gradient(135deg,#4c1d95,#7c3aed);color:#fff;padding:1rem 1rem 1.5rem;">
+  <div style="min-height:100dvh;background:#eef6ee;">
+    <div style="background:linear-gradient(135deg,#1d4a1a,#2D6A2A);color:#fff;padding:1rem 1rem 1.5rem;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;">
         <div>
           <button onclick="W.selectRegion(null)"
-            style="background:none;border:none;color:#ddd6fe;cursor:pointer;
+            style="background:none;border:none;color:#cfe8ca;cursor:pointer;
             font-size:.85rem;display:block;margin-bottom:.25rem;padding:0;">← Regiões</button>
           <h1 style="font-size:1.25rem;font-weight:800;margin:0;">⚖️ ${reg?.name || S.fiscalRegionId}</h1>
-          <p style="color:#ddd6fe;font-size:.82rem;margin:.25rem 0 0;">
+          <p style="color:#cfe8ca;font-size:.82rem;margin:.25rem 0 0;">
             ${cat ? `Categoria: ${cat}` : 'Fiscal de Prova'}
           </p>
         </div>
         <div style="display:flex;gap:.5rem;align-items:center;padding-top:.25rem;">
           <button onclick="W.openChangePwd()"
-            style="background:rgba(0,0,0,.2);border:none;color:#ddd6fe;
+            style="background:rgba(0,0,0,.2);border:none;color:#cfe8ca;
             padding:.375rem .75rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔑</button>
           <button onclick="W.logout()"
             style="background:rgba(0,0,0,.25);border:none;color:#fff;
@@ -174,7 +174,7 @@ function scoreCard(req, existing) {
   const curScores      = S.fiscalScores[req.id] || {};
   const deadlinePassed = isDeadlinePassed(req);
   const deadlineFmt    = fmtDeadline(req.deadline);
-  const borderLeft     = deadlinePassed ? '4px solid #ef4444' : existing ? '4px solid #7c3aed' : 'none';
+  const borderLeft     = deadlinePassed ? '4px solid #ef4444' : existing ? '4px solid #2D6A2A' : 'none';
 
   const statusBadge = existing
     ? existing.status === 'approved'
@@ -193,7 +193,7 @@ function scoreCard(req, existing) {
       return `
       <div style="background:#f8fafc;border-radius:.75rem;padding:.75rem;margin-bottom:.5rem;">
         <div style="font-size:.85rem;font-weight:600;color:#1e293b;margin-bottom:.375rem;">
-          ${si.name} <span style="color:#7c3aed;font-weight:700;">(máx ${si.points} pts)</span>
+          ${si.name} <span style="color:#2D6A2A;font-weight:700;">(máx ${si.points} pts)</span>
         </div>
         <div style="display:flex;gap:.375rem;flex-wrap:wrap;">
           ${SCORE_PCTS.map(pct => `
@@ -203,16 +203,16 @@ function scoreCard(req, existing) {
           </button>`).join('')}
         </div>
         ${selPct !== null
-          ? `<div style="font-size:.75rem;color:#7c3aed;font-weight:700;margin-top:.375rem;">→ ${earned} pts atribuídos</div>`
+          ? `<div style="font-size:.75rem;color:#2D6A2A;font-weight:700;margin-top:.375rem;">→ ${earned} pts atribuídos</div>`
           : ''}
       </div>`;
     });
 
     return `
-    <div style="background:#fff;border-radius:1rem;border:1px solid ${deadlinePassed ? '#fca5a5' : existing ? '#a78bfa' : '#e2e8f0'};
+    <div style="background:#fff;border-radius:1rem;border:1px solid ${deadlinePassed ? '#fca5a5' : existing ? '#86b382' : '#e2e8f0'};
       border-left:${borderLeft};padding:1rem;box-shadow:0 1px 3px rgba(0,0,0,.06);">
       <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem;">
-        <span style="background:#ede9fe;color:#6d28d9;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts máx</span>
+        <span style="background:#e3f0e2;color:#1f4d1c;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts máx</span>
         ${statusBadge}
         ${deadlinePassed
           ? `<span style="background:#fee2e2;color:#991b1b;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">🔒 Prazo encerrado</span>`
@@ -225,12 +225,12 @@ function scoreCard(req, existing) {
       ${rows.join('')}
       <div style="display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin-top:.25rem;">
         <div style="font-size:.9rem;font-weight:700;color:#1e293b;">
-          Total: <span style="color:#7c3aed;">${calcTotal} / ${req.points} pts</span>
+          Total: <span style="color:#2D6A2A;">${calcTotal} / ${req.points} pts</span>
         </div>
         ${deadlinePassed
           ? `<span style="font-size:.85rem;color:#dc2626;font-weight:700;">🔒 Encerrado</span>`
           : `<button onclick="W.submitSubItems('${req.id}')" ${S.loading ? 'disabled' : ''}
-              style="background:#7c3aed;color:#fff;border:none;padding:.625rem 1.25rem;
+              style="background:#2D6A2A;color:#fff;border:none;padding:.625rem 1.25rem;
               border-radius:.75rem;font-size:.9rem;font-weight:700;cursor:pointer;opacity:${S.loading ? .6 : 1};">
               ${existing ? '🔄 Atualizar' : '✅ Confirmar'}
             </button>`}
@@ -240,10 +240,10 @@ function scoreCard(req, existing) {
 
   // Sem sub-itens: entrada numérica
   return `
-  <div style="background:#fff;border-radius:1rem;border:1px solid ${deadlinePassed ? '#fca5a5' : existing ? '#a78bfa' : '#e2e8f0'};
+  <div style="background:#fff;border-radius:1rem;border:1px solid ${deadlinePassed ? '#fca5a5' : existing ? '#86b382' : '#e2e8f0'};
     border-left:${borderLeft};padding:1rem;box-shadow:0 1px 3px rgba(0,0,0,.06);">
     <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem;">
-      <span style="background:#ede9fe;color:#6d28d9;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts máx</span>
+      <span style="background:#e3f0e2;color:#1f4d1c;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts máx</span>
       ${statusBadge}
       ${deadlinePassed
         ? `<span style="background:#fee2e2;color:#991b1b;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">🔒 Prazo encerrado</span>`
@@ -263,7 +263,7 @@ function scoreCard(req, existing) {
       ${deadlinePassed
         ? `<span style="flex:1;min-width:120px;text-align:center;font-size:.85rem;color:#dc2626;font-weight:700;">🔒 Encerrado</span>`
         : `<button onclick="W.submitScore('${req.id}')" ${S.loading ? 'disabled' : ''}
-            style="flex:1;min-width:120px;background:#7c3aed;color:#fff;border:none;
+            style="flex:1;min-width:120px;background:#2D6A2A;color:#fff;border:none;
             padding:.625rem 1rem;border-radius:.75rem;font-size:.9rem;font-weight:700;cursor:pointer;
             opacity:${S.loading ? .6 : 1};">
             ${existing ? '🔄 Atualizar' : '✅ Confirmar'}
@@ -296,7 +296,7 @@ function mChangePassword() {
             onkeydown="if(event.key==='Enter')W.doChangePassword()">
         </div>
         <button onclick="W.doChangePassword()" ${S.loading ? 'disabled' : ''}
-          style="width:100%;background:#7c3aed;color:#fff;border:none;padding:1.1rem;
+          style="width:100%;background:#2D6A2A;color:#fff;border:none;padding:1.1rem;
           border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
           ${S.loading ? '⏳ Salvando...' : 'Salvar Nova Senha'}
         </button>
@@ -395,19 +395,17 @@ window.W = {
     const confirm = document.getElementById('pwd-confirm')?.value;
 
     if (!current || !newPwd || !confirm) { toast('Preencha todos os campos', 'error'); return; }
-    if (S.user.password !== current)     { toast('Senha atual incorreta', 'error');   return; }
     if (newPwd.length < 4)               { toast('Mínimo 4 caracteres', 'error');     return; }
     if (newPwd !== confirm)              { toast('As senhas não coincidem', 'error'); return; }
 
     S.loading = true; render();
     try {
-      await updatePassword(S.user.id, newPwd);
-      S.user = { ...S.user, password: newPwd };
+      await updatePassword(S.user.id, newPwd, getToken(), current);
       saveSession(S.user);
       toast('✅ Senha alterada com sucesso!');
       S.modal = null;
     } catch (e) {
-      toast('Erro ao alterar senha', 'error');
+      toast(e.message || 'Erro ao alterar senha', 'error');
     }
     S.loading = false; render();
   },

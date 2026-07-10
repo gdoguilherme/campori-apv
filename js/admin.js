@@ -1,6 +1,6 @@
-import { guardPage, logout as authLogout, saveSession, startExpiryWatcher } from './auth.js';
+import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatcher } from './auth.js';
 import {
-  subReqs, subSubs, subUsers, subRegions, setRegionCache,
+  subReqs, subSubs, subRegions, setRegionCache, fetchUsers,
   rname, fmtDate, badge, toast, genPassword, proofBlock,
   review as apiReview, saveReq as apiSaveReq, delReq as apiDelReq,
   createUser, updateUser, updatePassword, toggleUserActive as apiToggleUser,
@@ -23,7 +23,7 @@ const S = {
   loading: false,
 };
 
-let _unsubReqs = null, _unsubSubs = null, _unsubUsers = null, _unsubRegions = null;
+let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null;
 
 // ── INIT ──────────────────────────────────────────────────────
 export function init() {
@@ -34,14 +34,26 @@ export function init() {
 
   _unsubReqs    = subReqs(reqs     => { S.requirements = reqs;   render(); });
   _unsubSubs    = subSubs(null, subs => { S.submissions = subs;  render(); });
-  _unsubUsers   = subUsers(users   => { S.users = users;         render(); });
   _unsubRegions = subRegions(regs  => {
     S.regions = regs;
     setRegionCache(regs);
     render();
   });
 
+  refreshUsers();
   render();
+}
+
+// A coleção `users` não é mais lida em tempo real (ver firestore.rules) — o painel
+// busca a lista sob demanda e recarrega após qualquer mutação de usuário/região.
+async function refreshUsers() {
+  if (!['superadmin', 'admin'].includes(S.user?.role)) return; // approver não gerencia usuários/regiões
+  try {
+    S.users = await fetchUsers(getToken());
+    render();
+  } catch (e) {
+    toast('Erro ao carregar usuários: ' + e.message, 'error');
+  }
 }
 
 // ── HELPERS ───────────────────────────────────────────────────
@@ -123,7 +135,7 @@ function vAdmin() {
 
   return `
   <div style="min-height:100dvh;background:#f0f4f8;">
-    <div style="background:linear-gradient(135deg,#14532d,#166534);color:#fff;padding:1rem;">
+    <div style="background:linear-gradient(135deg,#0D2B6E,#123a8f);color:#fff;padding:1rem;">
       <div style="display:flex;justify-content:space-between;align-items:center;">
         <div>
           <div style="font-size:.78rem;color:#bbf7d0;margin-bottom:.2rem;">
@@ -217,7 +229,7 @@ function tReqs() {
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
     <span style="font-weight:800;color:#1e293b;">Requisitos (${S.requirements.length})</span>
     <button onclick="W.openReqForm(null)"
-      style="background:#166534;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Novo</button>
+      style="background:#0D2B6E;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Novo</button>
   </div>
   ${S.requirements.length === 0
     ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">📝</div><p style="font-weight:600;">Nenhum requisito cadastrado</p></div>`
@@ -229,7 +241,7 @@ function tReqs() {
             <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
               <span style="background:#f1f5f9;color:#475569;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.category}</span>
               <span style="background:#dbeafe;color:#1d4ed8;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts</span>
-              ${req.phase ? `<span style="background:#f0fdf4;color:#166534;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.phase}</span>` : ''}
+              ${req.phase ? `<span style="background:#f0fdf4;color:#0D2B6E;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.phase}</span>` : ''}
               ${req.competitionCategory && req.competitionCategory !== 'Ambos'
                 ? `<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.competitionCategory}</span>` : ''}
               ${req.evaluatedBy && req.evaluatedBy !== 'both'
@@ -265,7 +277,7 @@ function tHistory() {
       <span style="font-weight:800;color:#1e293b;">Histórico (${filtered.length})</span>
       <div style="display:flex;gap:.375rem;">
         <button onclick="W.exportExcel()"
-          style="background:#166534;color:#fff;border:none;padding:.375rem .875rem;border-radius:.625rem;font-size:.78rem;font-weight:700;cursor:pointer;">📊 Excel</button>
+          style="background:#0D2B6E;color:#fff;border:none;padding:.375rem .875rem;border-radius:.625rem;font-size:.78rem;font-weight:700;cursor:pointer;">📊 Excel</button>
         <button onclick="window.print()"
           style="background:#1e3a8a;color:#fff;border:none;padding:.375rem .875rem;border-radius:.625rem;font-size:.78rem;font-weight:700;cursor:pointer;">🖨️ Imprimir</button>
       </div>
@@ -274,7 +286,7 @@ function tHistory() {
       ${statuses.map(st => `
       <button onclick="W.filterStatus('${st}')"
         style="padding:.3rem .75rem;border-radius:999px;border:none;font-size:.75rem;font-weight:600;cursor:pointer;
-        background:${S.filterStatus === st ? '#166534' : '#f1f5f9'};
+        background:${S.filterStatus === st ? '#0D2B6E' : '#f1f5f9'};
         color:${S.filterStatus === st ? '#fff' : '#64748b'};">
         ${labels[st]}
       </button>`).join('')}
@@ -382,7 +394,7 @@ function tDashboard() {
             <span style="font-weight:700;color:#1d4ed8;">${s.total} pts</span>
           </div>
           <div style="background:#e2e8f0;border-radius:999px;height:.4rem;">
-            <div style="background:${i === 0 ? '#ca8a04' : i === 1 ? '#9ca3af' : i === 2 ? '#92400e' : '#3b82f6'};
+            <div style="background:${i === 0 ? '#D4A017' : i === 1 ? '#9ca3af' : i === 2 ? '#92400e' : '#3b82f6'};
               border-radius:999px;height:.4rem;width:${Math.round(s.total / maxPts * 100)}%;"></div>
           </div>
         </div>`).join('')}
@@ -397,7 +409,7 @@ function tDashboard() {
         <div>
           <div style="display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:.2rem;">
             <span style="color:#374151;">${cat}</span>
-            <span style="font-weight:700;color:#166534;">${pts} pts</span>
+            <span style="font-weight:700;color:#0D2B6E;">${pts} pts</span>
           </div>
           <div style="background:#e2e8f0;border-radius:999px;height:.4rem;">
             <div style="background:#16a34a;border-radius:999px;height:.4rem;width:${Math.round(pts / catMax * 100)}%;"></div>
@@ -422,7 +434,7 @@ function tRanking() {
         ${['Todos', 'DBV', 'AVT'].map(c => `
         <button onclick="W.setRankingCat('${c}')"
           style="padding:.375rem .875rem;border-radius:999px;border:none;font-size:.8rem;font-weight:700;cursor:pointer;
-          background:${cat === c ? '#166534' : 'transparent'};
+          background:${cat === c ? '#0D2B6E' : 'transparent'};
           color:${cat === c ? '#fff' : '#64748b'};">${c}</button>`).join('')}
       </div>
     </div>
@@ -440,7 +452,7 @@ function tRanking() {
         <div style="font-size:2.25rem;margin-bottom:.375rem;">🥇</div>
         <div style="background:#fef3c7;border-radius:.875rem .875rem 0 0;padding:.75rem .5rem 1rem;min-height:7rem;display:flex;flex-direction:column;justify-content:flex-end;">
           <div style="font-weight:800;color:#1e293b;font-size:.85rem;">${top3[0]?.name}</div>
-          <div style="color:#ca8a04;font-size:.8rem;font-weight:800;">${top3[0]?.total} pts</div>
+          <div style="color:#D4A017;font-size:.8rem;font-weight:800;">${top3[0]?.total} pts</div>
         </div>
       </div>
       <div style="flex:1;text-align:center;">
@@ -459,13 +471,13 @@ function tRanking() {
         <div style="display:flex;align-items:center;gap:.875rem;padding:.875rem;border-radius:.875rem;
           background:${i < 3 && s.total > 0 ? '#f0fdf4' : '#f8fafc'};">
           <div style="width:2rem;text-align:center;font-weight:800;font-size:.9rem;flex-shrink:0;
-            color:${i === 0 && s.total > 0 ? '#ca8a04' : i === 1 && s.total > 0 ? '#6b7280' : i === 2 && s.total > 0 ? '#92400e' : '#94a3b8'};">
+            color:${i === 0 && s.total > 0 ? '#D4A017' : i === 1 && s.total > 0 ? '#6b7280' : i === 2 && s.total > 0 ? '#92400e' : '#94a3b8'};">
             ${i === 0 && s.total > 0 ? '🥇' : i === 1 && s.total > 0 ? '🥈' : i === 2 && s.total > 0 ? '🥉' : `${i + 1}º`}
           </div>
           <div style="flex:1;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem;">
               <span style="font-weight:700;color:#1e293b;font-size:.9rem;">${s.name}</span>
-              <span style="font-weight:800;color:${s.total > 0 ? '#166534' : '#94a3b8'};font-size:.9rem;">${s.total} pts</span>
+              <span style="font-weight:800;color:${s.total > 0 ? '#0D2B6E' : '#94a3b8'};font-size:.9rem;">${s.total} pts</span>
             </div>
             <div style="background:#e2e8f0;border-radius:999px;height:.4rem;">
               <div style="background:#16a34a;border-radius:999px;height:.4rem;width:${Math.round((s.total / max) * 100)}%;"></div>
@@ -488,7 +500,7 @@ function tRegions() {
       <span style="font-weight:800;color:#1e293b;">Regiões (${S.regions.length})</span>
       <div style="display:flex;gap:.5rem;">
         <button onclick="W.openRegionForm(null)"
-          style="background:#166534;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Nova</button>
+          style="background:#0D2B6E;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Nova</button>
       </div>
     </div>
     ${sorted.length === 0
@@ -517,7 +529,7 @@ function tRegions() {
                   </div>`
                 : `<div style="font-size:.75rem;color:#94a3b8;margin-top:.15rem;">Sem responsável cadastrado</div>`}
               ${(() => { const lu = linkedUserOf(reg.id); return lu
-                ? `<div style="font-size:.72rem;color:#94a3b8;margin-top:.2rem;">🔑 Login: <strong>@${lu.username}</strong></div>`
+                ? `<div style="font-size:.72rem;color:#94a3b8;margin-top:.2rem;">🔑 Login: <strong>${lu.username}</strong></div>`
                 : `<div style="font-size:.72rem;color:#dc2626;margin-top:.2rem;">⚠️ Sem usuário vinculado</div>`; })()}
             </div>
             <div style="display:flex;gap:.375rem;flex-shrink:0;">
@@ -540,7 +552,7 @@ function tUsers() {
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
       <span style="font-weight:800;color:#1e293b;">Usuários (${sorted.length})</span>
       <button onclick="W.openUserForm(null)"
-        style="background:#166534;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Novo</button>
+        style="background:#0D2B6E;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Novo</button>
     </div>
     ${sorted.length === 0
       ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">👥</div><p>Nenhum usuário</p></div>`
@@ -551,14 +563,14 @@ function tUsers() {
             <div style="flex:1;">
               <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
                 <span style="background:${u.role === 'superadmin' ? '#fef3c7' : u.role === 'admin' ? '#dbeafe' : u.role === 'judge' ? '#ede9fe' : '#f0fdf4'};
-                  color:${u.role === 'superadmin' ? '#92400e' : u.role === 'admin' ? '#1d4ed8' : u.role === 'judge' ? '#6d28d9' : '#166534'};
+                  color:${u.role === 'superadmin' ? '#92400e' : u.role === 'admin' ? '#1d4ed8' : u.role === 'judge' ? '#6d28d9' : '#0D2B6E'};
                   font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${ROLES[u.role] || u.role}</span>
                 ${u.active === false ? `<span style="background:#fee2e2;color:#dc2626;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">Inativo</span>` : ''}
                 ${u.competitionCategory ? `<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${u.competitionCategory}</span>` : ''}
                 ${u.judgeCategory ? `<span style="background:#f5f3ff;color:#6d28d9;font-size:.7rem;padding:.2rem .6rem;border-radius:999px;">${u.judgeCategory}</span>` : ''}
               </div>
               <div style="font-weight:700;color:#1e293b;">${u.name}</div>
-              <div style="font-size:.78rem;color:#64748b;">@${u.username}${u.phone ? ` · ${u.phone}` : ''}</div>
+              <div style="font-size:.78rem;color:#64748b;">${u.username}${u.phone ? ` · ${u.phone}` : ''}</div>
             </div>
             <div style="display:flex;gap:.375rem;flex-shrink:0;">
               <button onclick="W.openUserForm('${u.id}')"
@@ -657,7 +669,7 @@ function mReqForm() {
         </div>` : ''}
 
         <button onclick="W.saveReq()" ${S.loading ? 'disabled' : ''}
-          style="width:100%;background:#166534;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
           ${S.loading ? '⏳ Salvando...' : (isEdit ? '💾 Salvar' : '+ Criar Requisito')}
         </button>
       </div>
@@ -694,7 +706,7 @@ function mUserForm() {
         <div>${lbl('Telefone')}<input id="u-phone" type="tel" value="${u?.phone || ''}" placeholder="(11) 99999-9999"
           style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
         ${isEdit
-          ? `<div style="background:#f8fafc;border-radius:.875rem;padding:.75rem;font-size:.85rem;color:#64748b;">Usuário: <strong>@${u?.username}</strong></div>`
+          ? `<div style="background:#f8fafc;border-radius:.875rem;padding:.75rem;font-size:.85rem;color:#64748b;">Usuário: <strong>${u?.username}</strong></div>`
           : `<div style="background:#f8fafc;border-radius:.875rem;padding:.75rem 1rem;font-size:.8rem;color:#64748b;">🔑 Login e senha serão gerados automaticamente a partir do nome</div>`}
         ${role === 'judge' ? `
           <div>${lbl('Categoria *')}<select id="u-cat"
@@ -703,7 +715,7 @@ function mUserForm() {
             ${CATEGORIES.map(c => `<option value="${c}" ${u?.judgeCategory === c ? 'selected' : ''}>${c}</option>`).join('')}
           </select></div>` : ''}
         <button onclick="W.saveUser()" ${S.loading ? 'disabled' : ''}
-          style="width:100%;background:#166534;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
           ${S.loading ? '⏳ Salvando...' : (isEdit ? '💾 Salvar' : '+ Criar Usuário')}
         </button>` : ''}
       </div>
@@ -756,15 +768,15 @@ function mRegionForm() {
         ${isEdit ? `
         <div style="background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;">
           <div style="font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">
-            🔑 Usuário vinculado: <strong>${linkedUser ? `@${linkedUser.username}` : '— não encontrado'}</strong>
+            🔑 Usuário vinculado: <strong>${linkedUser ? linkedUser.username : '— não encontrado'}</strong>
           </div>
           <div style="display:flex;align-items:center;gap:.75rem;">
-            <input id="reg-pwd" type="text" value="${S.generatedPwd}"
+            <input id="reg-pwd" type="text" value="${S.generatedPwd}" placeholder="Deixe em branco para manter a senha atual"
               style="flex:1;border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.625rem;font-size:1rem;font-weight:700;letter-spacing:.1rem;background:#fff;outline:none;">
             <button onclick="W.regenPwd()"
-              style="background:#166534;border:none;color:#fff;padding:.625rem .875rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔄</button>
+              style="background:#0D2B6E;border:none;color:#fff;padding:.625rem .875rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔄 Gerar nova</button>
           </div>
-          <div style="font-size:.75rem;color:#64748b;margin-top:.375rem;">Senha atual do login da região</div>
+          <div style="font-size:.75rem;color:#64748b;margin-top:.375rem;">A senha atual é criptografada e não pode ser exibida — gere uma nova apenas se precisar redefini-la</div>
         </div>` : `
         <div style="background:#f8fafc;border-radius:.875rem;padding:.75rem 1rem;font-size:.8rem;color:#64748b;">
           🔑 Login e senha serão gerados automaticamente a partir do nome do responsável
@@ -775,7 +787,7 @@ function mRegionForm() {
           <label for="reg-active" style="font-size:.9rem;font-weight:600;color:#374151;">Região ativa</label>
         </div>` : ''}
         <button onclick="W.saveRegion()" ${S.loading ? 'disabled' : ''}
-          style="width:100%;background:#166534;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
           ${S.loading ? '⏳ Salvando...' : isEdit ? '💾 Salvar' : '+ Criar Região'}
         </button>
       </div>
@@ -790,11 +802,11 @@ function mCredentialsModal() {
   const { title, username, password } = S.createdCreds || {};
   const row = (label, value, field) => `
     <div>
-      <div style="font-size:.72rem;font-weight:700;color:#166534;">${label}</div>
+      <div style="font-size:.72rem;font-weight:700;color:#0D2B6E;">${label}</div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;">
         <span style="font-size:1.05rem;font-weight:800;letter-spacing:${field === 'password' ? '.1rem' : '0'};color:#1e293b;">${value}</span>
         <button onclick="W.copyCred('${field}')"
-          style="background:#166534;border:none;color:#fff;padding:.4rem .7rem;border-radius:.5rem;font-size:.72rem;font-weight:700;cursor:pointer;flex-shrink:0;">📋 Copiar</button>
+          style="background:#0D2B6E;border:none;color:#fff;padding:.4rem .7rem;border-radius:.5rem;font-size:.72rem;font-weight:700;cursor:pointer;flex-shrink:0;">📋 Copiar</button>
       </div>
     </div>`;
   return `
@@ -804,11 +816,11 @@ function mCredentialsModal() {
       <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 .375rem;">${title || 'Criado com sucesso!'}</h2>
       <p style="font-size:.85rem;color:#64748b;margin:0 0 1.25rem;">Anote as credenciais de acesso:</p>
       <div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:.875rem;padding:1rem;text-align:left;margin-bottom:1.25rem;display:flex;flex-direction:column;gap:.75rem;">
-        ${row('Usuário', `@${username}`, 'username')}
+        ${row('Usuário', username, 'username')}
         ${row('Senha', password, 'password')}
       </div>
       <button onclick="W.closeCredentials()"
-        style="width:100%;background:#166534;color:#fff;border:none;padding:1rem;border-radius:1rem;font-size:.95rem;font-weight:800;cursor:pointer;">Fechar</button>
+        style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1rem;border-radius:1rem;font-size:.95rem;font-weight:800;cursor:pointer;">Fechar</button>
     </div>
   </div>`;
 }
@@ -837,7 +849,7 @@ function mChangePassword() {
             onkeydown="if(event.key==='Enter')W.doChangePassword()">
         </div>
         <button onclick="W.doChangePassword()" ${S.loading ? 'disabled' : ''}
-          style="width:100%;background:#166534;color:#fff;border:none;padding:1.1rem;
+          style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;
           border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
           ${S.loading ? '⏳ Salvando...' : 'Salvar Nova Senha'}
         </button>
@@ -853,7 +865,6 @@ window.W = {
   logout() {
     if (_unsubReqs)    _unsubReqs();
     if (_unsubSubs)    _unsubSubs();
-    if (_unsubUsers)   _unsubUsers();
     if (_unsubRegions) _unsubRegions();
     authLogout();
   },
@@ -972,28 +983,29 @@ window.W = {
         await updateUser(S.editingUser.id, {
           name, phone: phone || '', role,
           judgeCategory: judgeCat || null
-        });
+        }, getToken());
         toast('Usuário atualizado! ✅');
         S.modal = null; S.editingUser = null;
       } else {
         const { username } = await createUser({
           name, phone: phone || '', password: pwd, role,
           judgeCategory: judgeCat || null
-        }, S.user);
+        }, getToken());
         S.createdCreds = { title: 'Usuário criado!', username, password: pwd };
         S.modal = 'credentials';
         S.editingUser = null;
       }
+      await refreshUsers();
     } catch (e) { toast(e.message, 'error'); }
     S.loading = false; render();
   },
   toggleUser(id, currentlyActive) {
-    apiToggleUser(id, currentlyActive)
-      .then(() => toast(currentlyActive ? 'Usuário desativado' : 'Usuário ativado!'));
+    apiToggleUser(id, currentlyActive, getToken())
+      .then(() => { toast(currentlyActive ? 'Usuário desativado' : 'Usuário ativado!'); refreshUsers(); });
   },
   deleteUser(id, name) {
     if (!confirm(`Excluir permanentemente o usuário "${name}"?\n\nEsta ação não pode ser desfeita.`)) return;
-    apiDeleteUser(id).then(() => toast('Usuário excluído.', 'info'));
+    apiDeleteUser(id, getToken()).then(() => { toast('Usuário excluído.', 'info'); refreshUsers(); });
   },
   deleteSubmission(id) {
     if (!confirm('Excluir esta comprovação permanentemente?\n\nEsta ação não pode ser desfeita.')) return;
@@ -1003,8 +1015,9 @@ window.W = {
   // ── Regiões ────────────────────────────────────────────────
   openRegionForm(id) {
     S.editingRegion = id ? S.regions.find(r => r.id === id) : null;
-    const linkedUser = id ? S.users.find(u => u.regionId === id && u.role === 'region') : null;
-    S.generatedPwd = linkedUser?.password || genPassword();
+    // Ao editar, a senha não é mais recuperável (hash) — o campo começa vazio
+    // e só é enviada se o admin explicitamente gerar/preencher uma nova.
+    S.generatedPwd = id ? '' : genPassword();
     S.modal = 'region-form'; render();
   },
   async saveRegion() {
@@ -1023,25 +1036,26 @@ window.W = {
         await apiUpdateRegion(S.editingRegion.id, {
           name, responsible: responsible || '', responsiblePhone: phone || '',
           competitionCategory: compCat, active
-        }, linkedUser?.id, pwd);
+        }, linkedUser?.id, pwd, getToken());
         toast('Região salva! ✅');
         S.modal = null; S.editingRegion = null;
       } else {
         const { username, password } = await apiCreateRegion({
           name, responsible: responsible || '', responsiblePhone: phone || '',
           competitionCategory: compCat, password: pwd
-        });
+        }, getToken());
         S.createdCreds = { title: 'Região criada!', username, password };
         S.editingRegion = null;
         S.modal = 'credentials';
       }
+      await refreshUsers();
     } catch (e) { toast(e.message || 'Erro ao salvar.', 'error'); }
     S.loading = false; render();
   },
   delRegion(id, name) {
     if (!confirm(`Excluir a região "${name}"?\n\nIsso também excluirá o usuário/login vinculado.\nEsta ação não pode ser desfeita.`)) return;
     const linkedUser = S.users.find(u => u.regionId === id && u.role === 'region');
-    apiDelRegion(id, linkedUser?.id).then(() => toast('Região e usuário excluídos.', 'info'));
+    apiDelRegion(id, linkedUser?.id, getToken()).then(() => { toast('Região e usuário excluídos.', 'info'); refreshUsers(); });
   },
 
   // ── Senha ──────────────────────────────────────────────────
@@ -1050,17 +1064,15 @@ window.W = {
     const newPwd  = document.getElementById('pwd-new')?.value;
     const confirm = document.getElementById('pwd-confirm')?.value;
     if (!current || !newPwd || !confirm) { toast('Preencha todos os campos', 'error'); return; }
-    if (S.user.password !== current)     { toast('Senha atual incorreta', 'error');   return; }
     if (newPwd.length < 4)               { toast('Mínimo 4 caracteres', 'error');     return; }
     if (newPwd !== confirm)              { toast('As senhas não coincidem', 'error'); return; }
     S.loading = true; render();
     try {
-      await updatePassword(S.user.id, newPwd);
-      S.user = { ...S.user, password: newPwd };
+      await updatePassword(S.user.id, newPwd, getToken(), current);
       saveSession(S.user);
       toast('✅ Senha alterada com sucesso!');
       S.modal = null;
-    } catch (e) { toast('Erro ao alterar senha', 'error'); }
+    } catch (e) { toast(e.message || 'Erro ao alterar senha', 'error'); }
     S.loading = false; render();
   },
 };

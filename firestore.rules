@@ -1,0 +1,62 @@
+rules_version = '2';
+
+// ATENÇÃO — este arquivo não é aplicado automaticamente.
+// O projeto não usa o Firebase CLI (sem firebase.json), então as regras
+// hoje são geridas manualmente no Console (Firestore Database → Regras).
+//
+// Este arquivo documenta a regra que precisa ser adicionada/atualizada
+// para a Fase 2 (autenticação segura): a coleção `users` passa a ser
+// acessada SOMENTE pelo backend (server/ no Fly.io, via Firebase Admin SDK,
+// que ignora estas regras). Nenhum client (navegador) deve conseguir ler
+// ou escrever diretamente nessa coleção — é lá que ficam os hashes de senha.
+//
+// Passo manual: abra o Console do Firebase → Firestore Database → Regras,
+// e substitua o bloco `match /users/{userId}` pela versão abaixo, mantendo
+// as regras já existentes para as demais coleções (regions, requirements,
+// submissions, auditLog etc. — este arquivo não conhece o conteúdo atual
+// delas, então não mexa nessas outras regras a partir daqui).
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // IMPORTANTE: no Firestore, se duas regras `match` diferentes cobrem o
+    // mesmo caminho, o acesso é liberado se QUALQUER uma permitir — não existe
+    // "a mais específica vence". Por isso este arquivo NÃO usa um catch-all
+    // `match /{document=**}` (ele também bateria em /users/** e anularia o
+    // bloqueio abaixo). Cada coleção é listada explicitamente.
+
+    match /users/{userId} {
+      allow read, write: if false;
+    }
+
+    match /regions/{regionId} {
+      allow read, write: if true;
+    }
+    match /requirements/{reqId} {
+      allow read, write: if true;
+    }
+    match /submissions/{subId} {
+      allow read, write: if true;
+    }
+    match /auditLog/{logId} {
+      allow read, write: if true;
+    }
+
+    // Coleções novas das próximas fases (participantes, unidades, disciplina) —
+    // adicionadas já agora para não precisar reeditar a regra a cada fase.
+    // Mesmo nível de acesso das demais (aberto, sem Firebase Auth no app).
+    match /participants/{participantId} {
+      allow read, write: if true;
+    }
+    match /units/{unitId} {
+      allow read, write: if true;
+    }
+    match /disciplinaryActions/{actionId} {
+      allow read, write: if true;
+    }
+
+    // Se o Console mostrar outras coleções além destas, adicione um bloco
+    // `match /nomeDaColecao/{id} { allow read, write: if true; }` para cada uma
+    // ANTES de publicar — não reintroduza o catch-all `{document=**}`.
+  }
+}

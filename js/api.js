@@ -1,5 +1,5 @@
 import {
-  db, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, setDoc,
+  db, collection, doc, addDoc, updateDoc, deleteDoc,
   query, where, orderBy, onSnapshot, serverTimestamp
 } from './firebase.js';
 
@@ -16,6 +16,20 @@ export const ROLES = { superadmin:'Super Admin', admin:'Administrador', approver
 export const COMP_CATS = ['Ambos','DBV','AVT'];
 export const SCORE_PCTS = [0, 30, 50, 70, 100];
 export const UPLOAD_SERVER = 'https://campori-apv-upload.fly.dev';
+const SERVER_BASE = UPLOAD_SERVER; // mesmo servidor Express (Fly.io) hospeda upload + autenticação/usuários
+
+// Chamada JSON autenticada (opcional) ao backend — usada por tudo que toca a coleção `users`,
+// que não é mais lida/escrita direto do client (ver firestore.rules)
+async function apiFetch(path, { method = 'GET', body, token } = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${SERVER_BASE}${path}`, {
+    method, headers, body: body !== undefined ? JSON.stringify(body) : undefined
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
 
 // ── HELPERS ────────────────────────────────────────────────────
 
@@ -124,36 +138,24 @@ export function subSubs(regionId, onUpdate) {
   }, err => toast('Erro ao carregar dados: ' + err.message, 'error'));
 }
 
-export function subUsers(onUpdate) {
-  return onSnapshot(collection(db, 'users'),
-    snap => onUpdate(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
-    err => toast('Erro ao carregar usuários: ' + err.message, 'error')
-  );
+// A coleção `users` não é mais lida em tempo real pelo client (regra do Firestore
+// nega leitura/escrita direta — ver firestore.rules). O painel admin busca a lista
+// via este endpoint (backend, Firebase Admin SDK) e recarrega após cada mutação.
+export async function fetchUsers(token) {
+  return apiFetch('/users', { token });
 }
 
 // ── AUTH ──────────────────────────────────────────────────────
 
+// Login e verificação de senha (bcrypt) acontecem no backend — retorna { user, token }
 export async function loginUser(username, password) {
-  const snap = await getDocs(query(collection(db, 'users'), where('username', '==', username.toLowerCase().trim())));
-  if (snap.empty) throw new Error('Usuário não encontrado');
-  const user = { id: snap.docs[0].id, ...snap.docs[0].data() };
-  if (user.password !== password) throw new Error('Senha incorreta');
-  if (user.active === false) throw new Error('Usuário inativo');
-  return user;
+  return apiFetch('/users/login', { method: 'POST', body: { username, password } });
 }
 
 // Cria admin inicial se não houver nenhum usuário; retorna a senha gerada ou null
 export async function ensureInitialAdmin() {
-  const snap = await getDocs(collection(db, 'users'));
-  if (snap.empty) {
-    const pwd = genPassword();
-    await setDoc(doc(db, 'users', 'initial-admin'), {
-      name: 'Super Admin', phone: '', username: 'admin', password: pwd,
-      role: 'superadmin', active: true, createdAt: serverTimestamp()
-    });
-    return pwd;
-  }
-  return null;
+  const { created, password } = await apiFetch('/users/ensure-initial-admin', { method: 'POST' });
+  return created ? password : null;
 }
 
 // ── SUBMISSIONS ───────────────────────────────────────────────
@@ -245,99 +247,71 @@ export async function delReq(id) {
 
 // ── USERS ─────────────────────────────────────────────────────
 
-export async function createUser(data, currentUser) {
-  const username = await generateUsernameFromName(data.name);
-  await addDoc(collection(db, 'users'), {
-    ...data, username,
-    active: true,
-    createdAt: serverTimestamp(),
-    createdBy: currentUser?.username || 'system'
+export async function createUser(data, token) {
+  return apiFetch('/users', { method: 'POST', token, body: data }); // { id, username, password }
+}
+
+export async function updateUser(id, data, token) {
+  return apiFetch(`/users/${id}`, { method: 'PATCH', token, body: data });
+}
+
+// currentPassword: exigido no autoatendimento (troca pelo próprio usuário); admin pode omitir
+export async function updatePassword(userId, newPassword, token, currentPassword) {
+  return apiFetch(`/users/${userId}/password`, {
+    method: 'POST', token, body: { newPassword, ...(currentPassword ? { currentPassword } : {}) }
   });
-  return { username };
 }
 
-export async function updateUser(id, data) {
-  await updateDoc(doc(db, 'users', id), data);
+export async function toggleUserActive(id, currentlyActive, token) {
+  return apiFetch(`/users/${id}/active`, { method: 'PATCH', token, body: { active: !currentlyActive } });
 }
 
-export async function updatePassword(userId, newPassword) {
-  await updateDoc(doc(db, 'users', userId), { password: newPassword });
-}
-
-export async function toggleUserActive(id, currentlyActive) {
-  await updateDoc(doc(db, 'users', id), { active: !currentlyActive });
-}
-
-export async function deleteUser(id) {
-  await deleteDoc(doc(db, 'users', id));
+export async function deleteUser(id, token) {
+  return apiFetch(`/users/${id}`, { method: 'DELETE', token });
 }
 
 // ── REGIONS ───────────────────────────────────────────────────
+// (username/slugify agora vivem no backend — ver server/routes/users.js)
 
-function slugify(str) {
-  return (str || '')
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
 
-async function usernameTaken(username) {
-  const snap = await getDocs(query(collection(db, 'users'), where('username', '==', username)));
-  return !snap.empty;
-}
 
-// Gera um login único a partir de um nome: tenta nome.sobrenome, depois nome.inicial,
-// e por fim acrescenta um sufixo numérico se ainda houver colisão
-async function generateUsernameFromName(fullName) {
-  const words = slugify(fullName).split('-').filter(Boolean);
-  if (words.length === 0) words.push('usuario');
-  const first = words[0];
-  const last  = words[words.length - 1];
-  const candidates = words.length > 1 ? [`${first}.${last}`, `${first}.${last[0]}`] : [first];
-
-  for (const candidate of candidates) {
-    if (!(await usernameTaken(candidate))) return candidate;
-  }
-  const base = candidates[0];
-  let i = 2;
-  while (await usernameTaken(`${base}${i}`)) i++;
-  return `${base}${i}`;
-}
 
 // Cria a região e o usuário/login vinculado automaticamente (login a partir do nome do responsável)
-export async function createRegion(data) {
+export async function createRegion(data, token) {
   const regRef = await addDoc(collection(db, 'regions'), {
     name: data.name, responsible: data.responsible || '', responsiblePhone: data.responsiblePhone || '',
     competitionCategory: data.competitionCategory, active: true
   });
-  const username = await generateUsernameFromName(data.responsible || data.name);
-  const password = data.password || genPassword();
-  await addDoc(collection(db, 'users'), {
-    name: data.name, phone: data.responsiblePhone || '', username, password,
-    role: 'region', regionId: regRef.id, competitionCategory: data.competitionCategory,
-    active: true, createdAt: serverTimestamp(), createdBy: 'system'
+  const { username, password } = await apiFetch('/users', {
+    method: 'POST', token,
+    body: {
+      name: data.name, phone: data.responsiblePhone || '', password: data.password,
+      usernameSeed: data.responsible || data.name,
+      role: 'region', regionId: regRef.id, competitionCategory: data.competitionCategory
+    }
   });
   return { id: regRef.id, username, password };
 }
 
-// Atualiza a região e sincroniza nome/modalidade/status/senha do usuário vinculado
-export async function updateRegion(id, data, linkedUserId, password) {
+// Atualiza a região e sincroniza nome/modalidade/status do usuário vinculado.
+// password: só é enviada (e trocada) se o admin explicitamente preencheu o campo.
+export async function updateRegion(id, data, linkedUserId, password, token) {
   await updateDoc(doc(db, 'regions', id), data);
   if (linkedUserId) {
-    await updateDoc(doc(db, 'users', linkedUserId), {
-      name: data.name,
-      competitionCategory: data.competitionCategory,
-      active: data.active,
-      ...(password ? { password } : {})
+    await apiFetch(`/users/${linkedUserId}`, {
+      method: 'PATCH', token,
+      body: { name: data.name, competitionCategory: data.competitionCategory, active: data.active }
     });
+    if (password) {
+      await apiFetch(`/users/${linkedUserId}/password`, { method: 'POST', token, body: { newPassword: password } });
+    }
   }
 }
 
 // Exclui a região e o usuário vinculado
-export async function delRegion(id, linkedUserId) {
+export async function delRegion(id, linkedUserId, token) {
   await deleteDoc(doc(db, 'regions', id));
-  if (linkedUserId) await deleteDoc(doc(db, 'users', linkedUserId));
+  if (linkedUserId) await apiFetch(`/users/${linkedUserId}`, { method: 'DELETE', token });
 }
 
 // ── SUBMISSIONS ───────────────────────────────────────────────

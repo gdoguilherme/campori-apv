@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Entrar — Campori de Líderes APV</title>
+  <title>Entrar — ÍNTEGROS · III Campori de Líderes APV</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230D2B6E'/%3E%3Ctext x='32' y='45' font-family='Arial,Helvetica,sans-serif' font-size='34' font-weight='900' fill='%23D4A017' text-anchor='middle'%3EI%3C/text%3E%3C/svg%3E">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="../css/base.css">
 </head>
@@ -42,7 +43,7 @@ async function init() {
 function render() {
   app.innerHTML = `
   <div style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;
-    padding:1.5rem;background:linear-gradient(160deg,#1e3a8a 0%,#1d4ed8 60%,#2563eb 100%);">
+    padding:1.5rem;background:linear-gradient(160deg,#0D2B6E 0%,#123a8f 55%,#1ABFCF 100%);">
 
     ${firstRunPwd ? `
     <div style="background:#fef9c3;color:#713f12;border-radius:1rem;padding:1rem 1.25rem;
@@ -55,8 +56,9 @@ function render() {
 
     <div style="text-align:center;margin-bottom:2rem;">
       <div style="font-size:3.5rem;margin-bottom:.5rem;">⛺</div>
-      <h1 style="font-size:1.6rem;font-weight:800;color:#fff;margin:0;">Campori de Líderes</h1>
-      <p style="color:#93c5fd;font-size:.9rem;margin:.25rem 0 0;">APV — Sistema de Pontuação</p>
+      <h1 style="font-size:1.9rem;font-weight:800;color:#fff;margin:0;letter-spacing:.05em;">ÍNTEGROS</h1>
+      <p style="color:#F5C830;font-size:.9rem;font-weight:700;margin:.3rem 0 0;">III Campori de Líderes APV</p>
+      <p style="color:rgba(255,255,255,.75);font-size:.78rem;margin:.15rem 0 0;">Associação Paulista do Vale</p>
     </div>
 
     <div style="background:#fff;border-radius:1.5rem;padding:2rem;width:100%;max-width:340px;">
@@ -74,7 +76,7 @@ function render() {
             onkeydown="if(event.key==='Enter')W.doLogin()">
         </div>
         <button onclick="W.doLogin()" id="btn-login" ${loading ? 'disabled' : ''}
-          style="width:100%;background:#1e3a8a;color:#fff;border:none;padding:1.1rem;
+          style="width:100%;background:#D4A017;color:#1e293b;border:none;padding:1.1rem;
           border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;margin-top:.25rem;
           opacity:${loading ? .6 : 1};">
           ${loading ? '⏳ Entrando...' : '🔐 Entrar'}
@@ -92,8 +94,8 @@ window.W = {
     loading = true;
     render();
     try {
-      const user = await loginUser(username, password);
-      saveSession(user);
+      const { user, token } = await loginUser(username, password);
+      saveSession(user, token);
       location.replace(portalUrlForUser(user));
     } catch (e) {
       toast(e.message, 'error');

@@ -1,3 +1,12 @@
+/* Identidade oficial — ÍNTEGROS · III Campori de Líderes APV */
+:root {
+  --integros-blue:       #0D2B6E; /* azul escudo */
+  --integros-blue-glow:  #1ABFCF; /* azul glow */
+  --integros-gold:       #D4A017; /* dourado */
+  --integros-gold-light: #F5C830; /* dourado claro */
+  --integros-green:      #2D6A2A; /* verde natureza */
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
   -webkit-tap-highlight-color: transparent;
@@ -36,7 +45,7 @@ body {
 .badge-pending  { background: #fef3c7; color: #92400e; font-size: .7rem; font-weight: 700; padding: .2rem .6rem; border-radius: 999px; }
 .badge-approved { background: #d1fae5; color: #065f46; font-size: .7rem; font-weight: 700; padding: .2rem .6rem; border-radius: 999px; }
 .badge-rejected { background: #fee2e2; color: #991b1b; font-size: .7rem; font-weight: 700; padding: .2rem .6rem; border-radius: 999px; }
-.badge-fiscal   { background: #ede9fe; color: #5b21b6; font-size: .7rem; font-weight: 700; padding: .2rem .6rem; border-radius: 999px; }
+.badge-fiscal   { background: #e3f0e2; color: #1f4d1c; font-size: .7rem; font-weight: 700; padding: .2rem .6rem; border-radius: 999px; }
 
 /* ── UPLOAD ─────────────────────────────────────────────────── */
 .upload-area {
@@ -47,7 +56,7 @@ body {
   cursor: pointer;
   transition: all .2s;
 }
-.upload-area:hover  { border-color: #1e3a8a; background: #eff6ff; }
+.upload-area:hover  { border-color: var(--integros-blue); background: #eff6ff; }
 .upload-area.filled { border-color: #16a34a; background: #f0fdf4; border-style: solid; }
 input[type="file"] { display: none; }
 
@@ -66,13 +75,13 @@ input[type="file"] { display: none; }
   transition: all .15s;
   white-space: nowrap;
 }
-.tab-btn.active { color: #1e3a8a; border-bottom-color: #1e3a8a; }
+.tab-btn.active { color: var(--integros-blue); border-bottom-color: var(--integros-blue); }
 
 /* ── SPINNER ────────────────────────────────────────────────── */
 .spinner {
   width: 2rem; height: 2rem;
   border: 3px solid #e2e8f0;
-  border-top-color: #1e3a8a;
+  border-top-color: var(--integros-blue);
   border-radius: 50%;
   animation: spin .7s linear infinite;
 }
@@ -99,7 +108,7 @@ input[type="file"] { display: none; }
   color: #475569;
   transition: all .15s;
 }
-.pct-btn.sel { background: #7c3aed; color: #fff; border-color: #7c3aed; }
+.pct-btn.sel { background: var(--integros-green); color: #fff; border-color: var(--integros-green); }
 
 /* ── INTERAÇÃO ──────────────────────────────────────────────── */
 button:active { opacity: .85; transform: scale(.97); }

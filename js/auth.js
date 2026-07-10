@@ -1,9 +1,12 @@
 const SESSION_KEY = 'campori_v3_session';
 const SESSION_TTL = 8 * 60 * 60 * 1000; // 8 horas
 
-export function saveSession(user) {
+export function saveSession(user, token) {
+  const raw = sessionStorage.getItem(SESSION_KEY);
+  const prevToken = (() => { try { return JSON.parse(raw)?.token; } catch { return null; } })();
   sessionStorage.setItem(SESSION_KEY, JSON.stringify({
     user,
+    token: token || prevToken || null,
     expiresAt: Date.now() + SESSION_TTL
   }));
 }
@@ -18,6 +21,20 @@ export function getSession() {
       return null;
     }
     return user;
+  } catch {
+    return null;
+  }
+}
+
+// Token JWT emitido pelo backend (server/) — usado nas chamadas autenticadas
+// dos endpoints que tocam a coleção `users` (login, troca de senha, CRUD de usuários/regiões)
+export function getToken() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const { token, expiresAt } = JSON.parse(raw);
+    if (Date.now() > expiresAt) return null;
+    return token || null;
   } catch {
     return null;
   }

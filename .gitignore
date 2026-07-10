@@ -20,6 +20,9 @@ server/uploads/
 
 # Credenciais Google (não commitar chave privada)
 server/credentials.json
+server/firebase-credentials.json
+server/campori-apv-firebase-adminsdk.json
+server/*firebase-adminsdk*.json
 
 # Fly.io
 server/.fly/

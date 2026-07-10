@@ -363,6 +363,11 @@ export async function delRegion(id, linkedUserId, token) {
   if (linkedUserId) await apiFetch(`/users/${linkedUserId}`, { method: 'DELETE', token });
 }
 
+// Perfil auto-editável pela própria região: nome de guerra, logo, informações extras
+export async function updateRegionProfile(regionId, data) {
+  await updateDoc(doc(db, 'regions', regionId), data);
+}
+
 // ── PARTICIPANTS ──────────────────────────────────────────────
 
 export async function createParticipant(data) {

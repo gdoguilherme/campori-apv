@@ -2,7 +2,7 @@ import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatc
 import {
   subReqs, subSubs, subRegions, setRegionCache, rname, fmtDate, toast, showBanner,
   addSubmission, uploadFile, updateSubmissionProof, updatePassword, reqFilledBy,
-  subUnits, computeUnitScores, renderAnonRanking,
+  subUnits, computeUnitScores, renderAnonRanking, subParticipants, updateRegionProfile,
   CATEGORIES
 } from './api.js';
 
@@ -34,15 +34,19 @@ const S = {
   submissions: [],
   allSubmissions: [], // todas as submissions do sistema — só pro ranking geral anônimo
   units: [],
+  regions: [],
+  allParticipants: [],
   filterCat: 'Todos',
   selectedReq: null,
   photoFile: null,
   photoUrl: null,
-  modal: null,   // 'submit' | 'photo' | 'change-password'
+  profileLogoFile: null,
+  modal: null,   // 'submit' | 'photo' | 'change-password' | 'edit-profile'
   loading: false,
 };
 
-let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null, _unsubAllSubs = null, _unsubUnits = null;
+let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null, _unsubAllSubs = null,
+    _unsubUnits = null, _unsubParticipants = null;
 
 // ── INIT ──────────────────────────────────────────────────────
 export function init(theme) {
@@ -61,11 +65,12 @@ export function init(theme) {
   S.user = user;
   startExpiryWatcher();
 
-  _unsubReqs    = subReqs(reqs => { S.requirements = reqs; render(); });
-  _unsubSubs    = subSubs(user.regionId, subs => { S.submissions = subs; render(); });
-  _unsubRegions = subRegions(regs => { setRegionCache(regs); render(); });
-  _unsubAllSubs = subSubs(null, subs => { S.allSubmissions = subs; render(); });
-  _unsubUnits   = subUnits(units => { S.units = units; render(); });
+  _unsubReqs        = subReqs(reqs => { S.requirements = reqs; render(); });
+  _unsubSubs        = subSubs(user.regionId, subs => { S.submissions = subs; render(); });
+  _unsubRegions     = subRegions(regs => { S.regions = regs; setRegionCache(regs); render(); });
+  _unsubAllSubs     = subSubs(null, subs => { S.allSubmissions = subs; render(); });
+  _unsubUnits       = subUnits(units => { S.units = units; render(); });
+  _unsubParticipants = subParticipants(ps => { S.allParticipants = ps; render(); });
 
   render();
 }
@@ -95,6 +100,7 @@ function render() {
   if (S.modal === 'submit')          html += mSubmit();
   else if (S.modal === 'photo')      html += mPhoto();
   else if (S.modal === 'change-password') html += mChangePassword();
+  else if (S.modal === 'edit-profile')    html += mEditProfile();
   el.innerHTML = html;
 }
 
@@ -103,6 +109,11 @@ function vPortal() {
   const { user, theme } = S;
   const tc = THEMES[theme];
   const rid = user.regionId;
+  const region = S.regions.find(r => r.id === rid) || {};
+
+  const myUnits = S.units.filter(u => u.regionId === rid);
+  const myUnitIds = myUnits.map(u => u.id);
+  const myParticipants = S.allParticipants.filter(p => p.regionId === rid || myUnitIds.includes(p.unitId));
 
   // Submissions da própria região (exclui as de Conselheiro, que têm unitId e pontuam pra unidade, não pra região)
   const regionSubmissions = S.submissions.filter(s => !s.unitId);
@@ -175,8 +186,61 @@ function vPortal() {
       </div>
     </div>
 
+    <!-- PERFIL DA REGIÃO -->
+    <div style="padding:1rem 1rem 0;">
+      <div class="card" style="padding:1rem;">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem;">
+          <div style="display:flex;gap:.75rem;align-items:center;flex:1;min-width:0;">
+            ${region.logoUrl
+              ? `<img src="${region.logoUrl}" style="width:3rem;height:3rem;border-radius:.75rem;object-fit:cover;flex-shrink:0;">`
+              : `<div style="width:3rem;height:3rem;border-radius:.75rem;background:#f1f5f9;display:flex;align-items:center;justify-content:center;font-size:1.5rem;flex-shrink:0;">🛡️</div>`}
+            <div style="min-width:0;">
+              <div style="font-weight:800;color:#1e293b;font-size:.9rem;">${region.warCry ? `"${region.warCry}"` : 'Sem nome de guerra definido'}</div>
+              ${region.extraInfo ? `<div style="font-size:.78rem;color:#64748b;margin-top:.15rem;">${region.extraInfo}</div>` : ''}
+            </div>
+          </div>
+          <button onclick="W.openEditProfile()"
+            style="background:#eff6ff;color:#1d4ed8;border:none;padding:.5rem;border-radius:.625rem;cursor:pointer;flex-shrink:0;">✏️</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- UNIDADES DA REGIÃO -->
+    ${myUnits.length > 0 ? `
+    <div style="padding:1rem 1rem 0;">
+      <div style="font-weight:800;color:#1e293b;font-size:.9rem;margin-bottom:.625rem;">🏕️ Unidades da Região</div>
+      <div style="display:flex;flex-direction:column;gap:.5rem;">
+        ${myUnits.map(u => {
+          const count = S.allParticipants.filter(p => p.unitId === u.id).length;
+          return `
+          <div class="card" style="padding:.875rem 1rem;display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div style="font-weight:700;color:#1e293b;font-size:.88rem;">${u.name}</div>
+              ${u.warCry ? `<div style="font-size:.75rem;color:#64748b;font-style:italic;">"${u.warCry}"</div>` : ''}
+            </div>
+            <span style="background:#dbeafe;color:#1d4ed8;font-size:.75rem;font-weight:700;padding:.25rem .625rem;border-radius:999px;">👥 ${count}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+
+    <!-- PARTICIPANTES DA REGIÃO -->
+    <div style="padding:1rem 1rem 0;">
+      <div style="font-weight:800;color:#1e293b;font-size:.9rem;margin-bottom:.625rem;">👥 Participantes (${myParticipants.length})</div>
+      ${myParticipants.length === 0
+        ? `<p style="text-align:center;color:#94a3b8;font-size:.85rem;padding:1rem 0;">Nenhum participante cadastrado ainda</p>`
+        : `<div class="card" style="padding:.5rem;">
+          ${myParticipants.map(p => `
+          <div style="padding:.5rem .625rem;border-bottom:1px solid #f8fafc;">
+            <span style="font-weight:600;color:#1e293b;font-size:.85rem;">${p.name}</span>
+            <span style="color:#94a3b8;font-size:.75rem;"> ${p.club ? `· ${p.club}` : ''}</span>
+            ${p.regionId !== rid ? `<span style="color:#92400e;font-size:.72rem;font-weight:700;"> · clube amigo</span>` : ''}
+          </div>`).join('')}
+        </div>`}
+    </div>
+
     <!-- FILTRO CATEGORIA -->
-    <div style="background:#fff;border-bottom:1px solid #f1f5f9;padding:.625rem 1rem;display:flex;gap:.5rem;overflow-x:auto;scrollbar-width:none;">
+    <div style="background:#fff;border-bottom:1px solid #f1f5f9;padding:.625rem 1rem;display:flex;gap:.5rem;overflow-x:auto;scrollbar-width:none;margin-top:1rem;">
       ${cats.map(c => `
       <button onclick="W.filterCat('${c}')"
         style="white-space:nowrap;padding:.375rem .875rem;border-radius:999px;border:none;
@@ -371,6 +435,52 @@ function mPhoto() {
   </div>`;
 }
 
+// ── MODAL: EDITAR PERFIL DA REGIÃO ─────────────────────────────
+function mEditProfile() {
+  const tc = THEMES[S.theme];
+  const region = S.regions.find(r => r.id === S.user.regionId) || {};
+
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:420px;">
+      <h2 style="font-size:1.1rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">✏️ Perfil da Região</h2>
+      <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>
+          <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">Nome de Guerra</label>
+          <input type="text" id="pf-warcry" value="${region.warCry || ''}" placeholder="Ex: Guerreiros da Fé"
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;">
+        </div>
+        <div>
+          <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">Logo da Região</label>
+          <div class="upload-area ${S.profileLogoFile ? 'filled' : ''}" onclick="document.getElementById('pf-logo-inp').click()">
+            ${S.profileLogoFile
+              ? `<div style="color:#16a34a;font-weight:700;font-size:.9rem;">✅ ${S.profileLogoFile.name}</div>`
+              : region.logoUrl
+                ? `<img src="${region.logoUrl}" style="width:3rem;height:3rem;border-radius:.75rem;object-fit:cover;margin:0 auto .375rem;">
+                   <div style="font-size:.78rem;color:#374151;">Toque para trocar</div>`
+                : `<div style="font-size:1.75rem;">🖼️</div><div style="font-size:.82rem;color:#374151;">Toque para enviar logo</div>`}
+          </div>
+          <input type="file" id="pf-logo-inp" accept="image/*" onchange="W.handleProfileLogoFile(event)">
+        </div>
+        <div>
+          <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">Informações Extras</label>
+          <textarea id="pf-extrainfo" rows="3" placeholder="Sobre a região, contato, observações..."
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;resize:none;outline:none;font-family:inherit;">${region.extraInfo || ''}</textarea>
+        </div>
+        <button onclick="W.saveProfile()" ${S.loading ? 'disabled' : ''}
+          style="width:100%;background:${tc.primary};color:#fff;border:none;padding:1.1rem;
+          border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          ${S.loading ? '⏳ Salvando...' : '💾 Salvar Perfil'}
+        </button>
+      </div>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">
+        Cancelar
+      </button>
+    </div>
+  </div>`;
+}
+
 // ── MODAL: TROCAR SENHA ───────────────────────────────────────
 function mChangePassword() {
   const tc = THEMES[S.theme];
@@ -417,13 +527,45 @@ window.W = {
     if (_unsubRegions) _unsubRegions();
     if (_unsubAllSubs) _unsubAllSubs();
     if (_unsubUnits) _unsubUnits();
+    if (_unsubParticipants) _unsubParticipants();
     authLogout();
   },
 
   filterCat(cat) { S.filterCat = cat; render(); },
-  closeModal()   { S.modal = null; render(); },
+  closeModal()   { S.modal = null; S.profileLogoFile = null; render(); },
   openPhoto(url) { S.photoUrl = url; S.modal = 'photo'; render(); },
   openChangePwd(){ S.modal = 'change-password'; render(); },
+  openEditProfile() { S.profileLogoFile = null; S.modal = 'edit-profile'; render(); },
+
+  handleProfileLogoFile(evt) {
+    const f = evt.target.files[0] || null;
+    if (f && f.size > 10_485_760) {
+      toast('⚠️ Arquivo muito grande! Máximo 10 MB.', 'error');
+      evt.target.value = '';
+      S.profileLogoFile = null;
+    } else {
+      S.profileLogoFile = f;
+    }
+    render();
+  },
+
+  async saveProfile() {
+    const warCry    = document.getElementById('pf-warcry')?.value?.trim() || '';
+    const extraInfo = document.getElementById('pf-extrainfo')?.value?.trim() || '';
+    S.loading = true; render();
+    try {
+      let logoUrl;
+      if (S.profileLogoFile) {
+        logoUrl = await uploadFile(S.profileLogoFile, S.user.regionId, 'perfil-logo');
+      }
+      await updateRegionProfile(S.user.regionId, { warCry, extraInfo, ...(logoUrl ? { logoUrl } : {}) });
+      toast('✅ Perfil atualizado!');
+      S.modal = null; S.profileLogoFile = null;
+    } catch (e) {
+      toast(e.message || 'Erro ao salvar perfil.', 'error');
+    }
+    S.loading = false; render();
+  },
 
   openSubmit(reqId) {
     S.selectedReq = reqId;

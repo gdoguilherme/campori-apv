@@ -1,7 +1,7 @@
 import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatcher } from './auth.js';
 import {
   subReqs, subSubs, subRegions, setRegionCache, fetchUsers, subParticipants, subUnits,
-  rname, fmtDate, badge, toast, genPassword, proofBlock,
+  rname, fmtDate, badge, toast, genPassword, proofBlock, reqFilledBy,
   review as apiReview, saveReq as apiSaveReq, delReq as apiDelReq,
   createUser, updateUser, updatePassword, toggleUserActive as apiToggleUser,
   deleteUser as apiDeleteUser, deleteSubmission as apiDeleteSubmission,
@@ -9,7 +9,7 @@ import {
   createParticipant, updateParticipant, deleteParticipant as apiDeleteParticipant, createParticipantsBulk,
   createUnit, updateUnit, deleteUnit as apiDeleteUnit, allocateParticipant,
   computeScores,
-  CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS
+  CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS, AREAS_ATUACAO, FILLED_BY
 } from './api.js';
 
 // ── ESTADO ────────────────────────────────────────────────────
@@ -256,18 +256,18 @@ function tReqs() {
   ${S.requirements.length === 0
     ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">📝</div><p style="font-weight:600;">Nenhum requisito cadastrado</p></div>`
     : `<div style="display:flex;flex-direction:column;gap:.625rem;">
-      ${S.requirements.map(req => `
+      ${S.requirements.map(req => { const type = reqFilledBy(req); return `
       <div class="card" style="padding:1rem;overflow:visible;">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;">
           <div style="flex:1;">
             <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
               <span style="background:#f1f5f9;color:#475569;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.category}</span>
+              ${req.areaAtuacao ? `<span style="background:#eef2ff;color:#4338ca;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">📌 ${req.areaAtuacao}</span>` : ''}
               <span style="background:#dbeafe;color:#1d4ed8;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts</span>
               ${req.phase ? `<span style="background:#f0fdf4;color:#0D2B6E;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.phase}</span>` : ''}
               ${req.competitionCategory && req.competitionCategory !== 'Ambos'
                 ? `<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.competitionCategory}</span>` : ''}
-              ${req.evaluatedBy && req.evaluatedBy !== 'both'
-                ? `<span class="badge-fiscal">${req.evaluatedBy === 'fiscal' ? '⚖️ Só Fiscal' : '📍 Só Região'}</span>` : ''}
+              <span class="badge-fiscal">${type === 'conselheiro' ? '🏕️' : type === 'fiscal' ? '⚖️' : '📍'} ${FILLED_BY[type]}</span>
               ${req.subItems?.length ? `<span style="background:#f5f3ff;color:#6d28d9;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">📊 ${req.subItems.length} sub</span>` : ''}
               ${req.active === false ? `<span style="background:#fee2e2;color:#dc2626;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">Inativo</span>` : ''}
             </div>
@@ -281,7 +281,7 @@ function tReqs() {
               style="background:#fef2f2;border:none;color:#ef4444;padding:.5rem;border-radius:.625rem;cursor:pointer;">🗑️</button>
           </div>
         </div>
-      </div>`).join('')}
+      </div>`; }).join('')}
     </div>`}`;
 }
 
@@ -773,13 +773,17 @@ function mReqForm() {
           <div>${lbl('Categoria *')}${sel('rq-cat', CATEGORIES, r.category || CATEGORIES[0])}</div>
           <div>${lbl('Fase *')}${sel('rq-phase', PHASES, r.phase || PHASES[0])}</div>
         </div>
+        <div>${lbl('Área de Atuação')}${sel('rq-areaatuacao', AREAS_ATUACAO, r.areaAtuacao || AREAS_ATUACAO[0])}</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;">
           <div>${lbl('Modalidade')}${sel('rq-compcat', COMP_CATS, r.competitionCategory || 'Ambos')}</div>
-          <div>${lbl('Avaliado por')}${sel('rq-evalby', [
-            { v: 'both', l: 'Fiscal e Região' },
-            { v: 'fiscal', l: 'Só Fiscal' },
-            { v: 'region', l: 'Só Região' }
-          ], r.evaluatedBy || 'both')}</div>
+          <div>${lbl('Tipo *')}${sel('rq-filledby', [
+            { v: 'regional', l: '📍 Regional' },
+            { v: 'conselheiro', l: '🏕️ Conselheiro' },
+            { v: 'fiscal', l: '⚖️ Só Fiscal' }
+          ], reqFilledBy(r))}</div>
+        </div>
+        <div style="font-size:.72rem;color:#94a3b8;margin-top:-.5rem;">
+          Regional: aparece no portal da região, pontua para todas as unidades. Conselheiro: aparece no portal do conselheiro (sem distinção de modalidade), pontua só para a unidade. Fiscal: só o Fiscal de Prova avalia.
         </div>
 
         <div style="border:1.5px solid #e2e8f0;border-radius:.875rem;padding:1rem;background:#fafafa;">
@@ -1284,7 +1288,8 @@ window.W = {
     const cat      = document.getElementById('rq-cat')?.value;
     const phase    = document.getElementById('rq-phase')?.value;
     const compCat  = document.getElementById('rq-compcat')?.value || 'Ambos';
-    const evalBy   = document.getElementById('rq-evalby')?.value || 'both';
+    const areaAtuacao = document.getElementById('rq-areaatuacao')?.value || '';
+    const filledBy = document.getElementById('rq-filledby')?.value || 'regional';
     const activeEl = document.getElementById('rq-active');
     const active   = activeEl ? activeEl.checked : true;
     const rows     = [...document.querySelectorAll('#subitems-list .sub-item-row')];
@@ -1303,7 +1308,7 @@ window.W = {
       await apiSaveReq({
         ...(S.editingReq?.id ? { id: S.editingReq.id } : {}),
         name, code, description: desc || '', category: cat, phase, points: pts,
-        competitionCategory: compCat, evaluatedBy: evalBy,
+        competitionCategory: compCat, areaAtuacao, filledBy,
         subItems: subItems.length > 0 ? subItems : null, active
       }, S.requirements.length);
       S.modal = null; S.editingReq = null;

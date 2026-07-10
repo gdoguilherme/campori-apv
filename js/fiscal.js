@@ -1,9 +1,17 @@
 import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatcher } from './auth.js';
 import {
   subReqs, subSubs, subRegions, setRegionCache,
-  rname, fmtDate, toast,
+  rname, fmtDate, toast, reqFilledBy,
   doFiscalSuggestion, updatePassword, SCORE_PCTS
 } from './api.js';
+
+// Requisitos do tipo Conselheiro pontuam por unidade, não por região — o fluxo do
+// Fiscal ainda seleciona uma região (sem escolher unidade), então por enquanto ele
+// só avalia Regional/Fiscal aqui. Avaliação de Conselheiro por unidade fica pra
+// quando a distribuição de pontos por unidade for implementada (junto da seleção de unidade).
+function fiscalCanEvaluate(req) {
+  return reqFilledBy(req) !== 'conselheiro';
+}
 
 // ── ESTADO ────────────────────────────────────────────────────
 const S = {
@@ -62,7 +70,7 @@ function vSelectRegion() {
   const evalReqs = S.requirements.filter(r =>
     r.active !== false &&
     (!cat || r.category === cat) &&
-    (r.evaluatedBy === 'fiscal' || r.evaluatedBy === 'both' || !r.evaluatedBy)
+    fiscalCanEvaluate(r)
   );
   const totalPossible = evalReqs.reduce((a, r) => a + r.points, 0);
 
@@ -125,7 +133,7 @@ function vScore() {
   const reqs = S.requirements.filter(r =>
     r.active !== false &&
     (!cat || r.category === cat) &&
-    (r.evaluatedBy === 'fiscal' || r.evaluatedBy === 'both' || !r.evaluatedBy)
+    fiscalCanEvaluate(r)
   );
 
   // Sugestões existentes do fiscal para esta região

@@ -1,7 +1,7 @@
 import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatcher } from './auth.js';
 import {
   subReqs, subSubs, subRegions, setRegionCache, rname, fmtDate, toast, showBanner,
-  addSubmission, uploadFile, updateSubmissionProof, updatePassword,
+  addSubmission, uploadFile, updateSubmissionProof, updatePassword, reqFilledBy,
   CATEGORIES
 } from './api.js';
 
@@ -79,8 +79,7 @@ function fmtDeadline(ts) {
 }
 
 function canRegionSubmit(req) {
-  const ev = req.evaluatedBy || 'both';
-  return ev === 'region' || ev === 'both';
+  return reqFilledBy(req) === 'regional';
 }
 
 // ── RENDER ────────────────────────────────────────────────────
@@ -100,24 +99,28 @@ function vPortal() {
   const tc = THEMES[theme];
   const rid = user.regionId;
 
+  // Submissions da própria região (exclui as de Conselheiro, que têm unitId e pontuam pra unidade, não pra região)
+  const regionSubmissions = S.submissions.filter(s => !s.unitId);
+
   // Última submission por requisito (qualquer source)
   const subByReq = {};
-  S.submissions.forEach(s => {
+  regionSubmissions.forEach(s => {
     const cur = subByReq[s.requirementId];
     if (!cur || (s.submittedAt?.seconds || 0) > (cur.submittedAt?.seconds || 0))
       subByReq[s.requirementId] = s;
   });
 
-  const approvedPts = S.submissions
+  const approvedPts = regionSubmissions
     .filter(s => s.status === 'approved')
     .reduce((a, s) => a + (s.requirementPoints || 0), 0);
-  const pendingPts = S.submissions
+  const pendingPts = regionSubmissions
     .filter(s => s.status === 'pending')
     .reduce((a, s) => a + (s.requirementPoints || 0), 0);
 
   const userCompCat = user.competitionCategory || null;
   const visibleReqs = S.requirements.filter(r =>
     r.active !== false &&
+    reqFilledBy(r) !== 'conselheiro' &&
     (!userCompCat || !r.competitionCategory || r.competitionCategory === 'Ambos' || r.competitionCategory === userCompCat)
   );
   const totalPossible = visibleReqs.reduce((a, r) => a + r.points, 0);
@@ -196,7 +199,7 @@ function reqCard(req, sub, tc) {
   const isPending  = sub?.status === 'pending';
   const isRejected = sub?.status === 'rejected';
   const isFiscalSuggestion = sub?.fiscalSuggestion === true;
-  const fiscalOnly = (req.evaluatedBy || 'both') === 'fiscal';
+  const fiscalOnly = reqFilledBy(req) === 'fiscal';
   const canSend    = canRegionSubmit(req);
   const deadlinePassed = isDeadlinePassed(req);
   const deadlineFmt    = fmtDeadline(req.deadline);
@@ -215,6 +218,7 @@ function reqCard(req, sub, tc) {
         <!-- Badges -->
         <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem;">
           <span style="background:#f1f5f9;color:#475569;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.category}</span>
+          ${req.areaAtuacao ? `<span style="background:#eef2ff;color:#4338ca;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">📌 ${req.areaAtuacao}</span>` : ''}
           <span style="background:#dbeafe;color:#1d4ed8;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts</span>
           ${req.phase ? `<span style="background:#f0fdf4;color:#166534;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.phase}</span>` : ''}
           ${req.competitionCategory && req.competitionCategory !== 'Ambos'

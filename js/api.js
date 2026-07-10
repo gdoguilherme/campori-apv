@@ -14,6 +14,10 @@ export const PHASES = ['Pré-Requisito','No Campori'];
 // 'judge' mantido no DB para retrocompatibilidade; exibido como 'Fiscal de Prova'
 export const ROLES = { superadmin:'Super Admin', admin:'Administrador', approver:'Aprovador', judge:'Fiscal de Prova', region:'Região', counselor:'Conselheiro' };
 export const COMP_CATS = ['Ambos','DBV','AVT'];
+// Área de Atuação do requisito (independente da Categoria) — onde o participante atua no Campori
+export const AREAS_ATUACAO = ['Administração','Nas Casas','Templos e Ruas','Acampamento','Cozinha','Saúde','Outras'];
+// Quem preenche/envia o requisito — substitui o antigo `evaluatedBy` ('both'|'fiscal'|'region')
+export const FILLED_BY = { regional: 'Regional', conselheiro: 'Conselheiro', fiscal: 'Só Fiscal' };
 export const SCORE_PCTS = [0, 30, 50, 70, 100];
 export const UPLOAD_SERVER = 'https://campori-apv-upload.fly.dev';
 const SERVER_BASE = UPLOAD_SERVER; // mesmo servidor Express (Fly.io) hospeda upload + autenticação/usuários
@@ -34,6 +38,10 @@ async function apiFetch(path, { method = 'GET', body, token } = {}) {
 // ── HELPERS ────────────────────────────────────────────────────
 
 export const rname = id => _regionCache.find(r => r.id === id)?.name || id;
+
+// Tipo do requisito ('regional'|'conselheiro'|'fiscal') — com fallback pro campo
+// antigo `evaluatedBy` em requisitos criados antes da Fase 6 (nunca migrados no banco)
+export const reqFilledBy = req => req.filledBy || (req.evaluatedBy === 'fiscal' ? 'fiscal' : 'regional');
 
 export function fmtDate(ts) {
   if (!ts) return '—';
@@ -169,6 +177,17 @@ export function subSubs(regionId, onUpdate) {
   }, err => toast('Erro ao carregar dados: ' + err.message, 'error'));
 }
 
+// Usado pelo portal do Conselheiro — submissions só da unidade dele (não da região toda,
+// que pode ter até 3 unidades com conselheiros diferentes)
+export function subSubsByUnit(unitId, onUpdate) {
+  const q = query(collection(db, 'submissions'), where('unitId', '==', unitId));
+  return onSnapshot(q, snap => {
+    const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    docs.sort((a, b) => (b.submittedAt?.seconds || 0) - (a.submittedAt?.seconds || 0));
+    onUpdate(docs);
+  }, err => toast('Erro ao carregar dados: ' + err.message, 'error'));
+}
+
 // A coleção `users` não é mais lida em tempo real pelo client (regra do Firestore
 // nega leitura/escrita direta — ver firestore.rules). O painel admin busca a lista
 // via este endpoint (backend, Firebase Admin SDK) e recarrega após cada mutação.
@@ -196,6 +215,7 @@ export async function addSubmission(user, req, notes, proofUrl = null) {
   const rid = user.regionId;
   const ref = await addDoc(collection(db, 'submissions'), {
     regionId: rid, regionName: rname(rid),
+    unitId: user.unitId || null, // presente quando o envio vem do portal do Conselheiro
     requirementId: req.id, requirementName: req.name,
     requirementPoints: req.points, requirementCategory: req.category,
     competitionCategory: req.competitionCategory || 'Ambos',

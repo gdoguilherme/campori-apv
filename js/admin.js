@@ -1,11 +1,13 @@
 import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatcher } from './auth.js';
 import {
-  subReqs, subSubs, subRegions, setRegionCache, fetchUsers,
+  subReqs, subSubs, subRegions, setRegionCache, fetchUsers, subParticipants, subUnits,
   rname, fmtDate, badge, toast, genPassword, proofBlock,
   review as apiReview, saveReq as apiSaveReq, delReq as apiDelReq,
   createUser, updateUser, updatePassword, toggleUserActive as apiToggleUser,
   deleteUser as apiDeleteUser, deleteSubmission as apiDeleteSubmission,
   createRegion as apiCreateRegion, updateRegion as apiUpdateRegion, delRegion as apiDelRegion,
+  createParticipant, updateParticipant, deleteParticipant as apiDeleteParticipant, createParticipantsBulk,
+  createUnit, updateUnit, deleteUnit as apiDeleteUnit, allocateParticipant,
   computeScores,
   CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS
 } from './api.js';
@@ -14,16 +16,20 @@ import {
 const S = {
   user: null,
   adminTab: 'queue',
-  requirements: [], submissions: [], users: [], regions: [],
+  sidebarOpen: false,
+  requirements: [], submissions: [], users: [], regions: [], participants: [], units: [],
   filterStatus: 'Todos',
   rankingCat: 'Todos',
-  editingReq: null, editingUser: null, editingRegion: null,
+  participantFilterRegion: 'Todas', participantFilterCat: 'Todos',
+  unitFilterRegion: 'Todas', unitParticipantSearch: '', counselorUnitId: null,
+  editingReq: null, editingUser: null, editingRegion: null, editingParticipant: null, editingUnit: null,
   formRole: null, generatedPwd: '', createdCreds: null,
+  importRows: [], importErrors: [],
   photoUrl: null, modal: null,
   loading: false,
 };
 
-let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null;
+let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null, _unsubParticipants = null, _unsubUnits = null;
 
 // ── INIT ──────────────────────────────────────────────────────
 export function init() {
@@ -39,6 +45,8 @@ export function init() {
     setRegionCache(regs);
     render();
   });
+  _unsubParticipants = subParticipants(ps => { S.participants = ps; render(); });
+  _unsubUnits        = subUnits(units => { S.units = units; render(); });
 
   refreshUsers();
   render();
@@ -110,6 +118,11 @@ function render() {
   if (S.modal === 'req-form')            html += mReqForm();
   else if (S.modal === 'user-form')      html += mUserForm();
   else if (S.modal === 'region-form')    html += mRegionForm();
+  else if (S.modal === 'participant-form')   html += mParticipantForm();
+  else if (S.modal === 'participant-import') html += mParticipantImport();
+  else if (S.modal === 'unit-form')          html += mUnitForm();
+  else if (S.modal === 'unit-participants')  html += mUnitParticipants();
+  else if (S.modal === 'counselor-form')     html += mCounselorForm();
   else if (S.modal === 'credentials')    html += mCredentialsModal();
   else if (S.modal === 'photo')          html += mPhoto();
   else if (S.modal === 'change-password') html += mChangePassword();
@@ -124,8 +137,10 @@ function vAdmin() {
     ...(isAdmin() ? [{ id: 'requirements', label: '⚙️ Requisitos' }] : []),
     { id: 'history',      label: '📂 Histórico' },
     ...(isAdmin() ? [
-      { id: 'dashboard',  label: '📊 Dashboard' },
-      { id: 'ranking',    label: '🏆 Ranking'   },
+      { id: 'dashboard',    label: '📊 Dashboard' },
+      { id: 'ranking',      label: '🏆 Ranking'   },
+      { id: 'participants', label: '👥 Participantes' },
+      { id: 'units',        label: '🏕️ Unidades' },
     ] : []),
     ...(isSuperAdmin() ? [
       { id: 'regions', label: '🗺️ Regiões' },
@@ -134,42 +149,49 @@ function vAdmin() {
   ];
 
   return `
-  <div style="min-height:100dvh;background:#f0f4f8;">
-    <div style="background:linear-gradient(135deg,#0D2B6E,#123a8f);color:#fff;padding:1rem;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <div>
-          <div style="font-size:.78rem;color:#bbf7d0;margin-bottom:.2rem;">
-            👤 ${S.user.name} · ${ROLES[S.user.role] || S.user.role}
-          </div>
-          <h1 style="font-size:1.25rem;font-weight:800;margin:0;">Painel ADM</h1>
+  <div class="admin-shell">
+    <div class="admin-sidebar-overlay ${S.sidebarOpen ? 'open' : ''}" onclick="W.toggleSidebar(false)"></div>
+    <nav class="admin-sidebar ${S.sidebarOpen ? 'open' : ''}">
+      <div style="padding:1.25rem 1rem 1rem;">
+        <div style="font-size:.78rem;color:#bbf7d0;margin-bottom:.2rem;">
+          👤 ${S.user.name} · ${ROLES[S.user.role] || S.user.role}
         </div>
-        <div style="display:flex;gap:.5rem;align-items:center;">
-          <button onclick="W.openChangePwd()"
-            style="background:rgba(0,0,0,.15);border:none;color:#bbf7d0;
-            padding:.4rem .75rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔑</button>
-          <button onclick="W.logout()"
-            style="background:rgba(0,0,0,.2);border:none;color:#fff;
-            padding:.5rem 1rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">Sair</button>
-        </div>
+        <h1 style="font-size:1.15rem;font-weight:800;margin:0;">Painel ADM</h1>
       </div>
-    </div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:.2rem;padding:.25rem .625rem;">
+        ${tabs.map(t => `
+        <button class="sidebar-link ${S.adminTab === t.id ? 'active' : ''}" onclick="W.setTab('${t.id}')">
+          <span>${t.label}</span>
+          ${t.count ? `<span class="count">${t.count}</span>` : ''}
+        </button>`).join('')}
+      </div>
+      <div style="padding:.75rem;display:flex;flex-direction:column;gap:.5rem;border-top:1px solid rgba(255,255,255,.12);">
+        <button onclick="W.openChangePwd()"
+          style="background:rgba(0,0,0,.15);border:none;color:#bbf7d0;text-align:left;
+          padding:.625rem .875rem;border-radius:.625rem;font-size:.85rem;cursor:pointer;">🔑 Trocar senha</button>
+        <button onclick="W.logout()"
+          style="background:rgba(0,0,0,.2);border:none;color:#fff;text-align:left;
+          padding:.625rem .875rem;border-radius:.625rem;font-size:.85rem;cursor:pointer;">🚪 Sair</button>
+      </div>
+    </nav>
 
-    <div style="background:#fff;border-bottom:1px solid #f1f5f9;display:flex;overflow-x:auto;scrollbar-width:none;">
-      ${tabs.map(t => `
-      <button class="tab-btn ${S.adminTab === t.id ? 'active' : ''}" onclick="W.setTab('${t.id}')">
-        ${t.label}
-        ${t.count ? `<span style="background:#ef4444;color:#fff;font-size:.65rem;font-weight:700;padding:.1rem .4rem;border-radius:999px;margin-left:.25rem;">${t.count}</span>` : ''}
-      </button>`).join('')}
-    </div>
+    <div class="admin-main" style="background:#f0f4f8;min-height:100dvh;">
+      <div style="background:#fff;border-bottom:1px solid #f1f5f9;padding:.75rem 1rem;display:flex;align-items:center;gap:.75rem;">
+        <button class="admin-hamburger" onclick="W.toggleSidebar(true)">☰</button>
+        <span style="font-weight:800;color:#1e293b;">${tabs.find(t => t.id === S.adminTab)?.label || 'Painel ADM'}</span>
+      </div>
 
-    <div style="padding:1rem;padding-bottom:5rem;">
-      ${S.adminTab === 'queue'        ? tQueue()    : ''}
-      ${S.adminTab === 'requirements' && isAdmin()  ? tReqs()    : ''}
-      ${S.adminTab === 'history'      ? tHistory()  : ''}
-      ${S.adminTab === 'dashboard'    && isAdmin()  ? tDashboard(): ''}
-      ${S.adminTab === 'ranking'      && isAdmin()       ? tRanking()  : ''}
-      ${S.adminTab === 'regions'      && isSuperAdmin()  ? tRegions()  : ''}
-      ${S.adminTab === 'users'        && isSuperAdmin()  ? tUsers()    : ''}
+      <div style="padding:1rem;padding-bottom:5rem;">
+        ${S.adminTab === 'queue'        ? tQueue()    : ''}
+        ${S.adminTab === 'requirements' && isAdmin()  ? tReqs()    : ''}
+        ${S.adminTab === 'history'      ? tHistory()  : ''}
+        ${S.adminTab === 'dashboard'    && isAdmin()  ? tDashboard(): ''}
+        ${S.adminTab === 'ranking'      && isAdmin()       ? tRanking()  : ''}
+        ${S.adminTab === 'participants' && isAdmin()       ? tParticipants() : ''}
+        ${S.adminTab === 'units'        && isAdmin()       ? tUnits()    : ''}
+        ${S.adminTab === 'regions'      && isSuperAdmin()  ? tRegions()  : ''}
+        ${S.adminTab === 'users'        && isSuperAdmin()  ? tUsers()    : ''}
+      </div>
     </div>
   </div>`;
 }
@@ -571,6 +593,9 @@ function tUsers() {
               </div>
               <div style="font-weight:700;color:#1e293b;">${u.name}</div>
               <div style="font-size:.78rem;color:#64748b;">${u.username}${u.phone ? ` · ${u.phone}` : ''}</div>
+              ${u.role === 'counselor' && u.unitId
+                ? `<div style="font-size:.72rem;color:#94a3b8;margin-top:.1rem;">🏕️ ${S.units.find(x => x.id === u.unitId)?.name || u.unitId}</div>`
+                : ''}
             </div>
             <div style="display:flex;gap:.375rem;flex-shrink:0;">
               <button onclick="W.openUserForm('${u.id}')"
@@ -585,6 +610,132 @@ function tUsers() {
             </div>
           </div>
         </div>`).join('')}
+      </div>`}
+  </div>`;
+}
+
+// ── TAB: PARTICIPANTES ────────────────────────────────────────
+function tParticipants() {
+  const regFilter = S.participantFilterRegion;
+  const catFilter = S.participantFilterCat;
+  const filtered = S.participants.filter(p =>
+    (regFilter === 'Todas' || p.regionId === regFilter) &&
+    (catFilter === 'Todos' || p.competitionCategory === catFilter)
+  ).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const sortedRegions = [...S.regions].sort((a, b) => a.name.localeCompare(b.name));
+
+  return `
+  <div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;flex-wrap:wrap;gap:.5rem;">
+      <span style="font-weight:800;color:#1e293b;">Participantes (${filtered.length})</span>
+      <div style="display:flex;gap:.5rem;">
+        <button onclick="W.openParticipantImport()"
+          style="background:#eff6ff;color:#1d4ed8;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">📥 Importar</button>
+        <button onclick="W.openParticipantForm(null)"
+          style="background:#0D2B6E;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Novo</button>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:.5rem;margin-bottom:.875rem;flex-wrap:wrap;">
+      <select onchange="W.setParticipantFilterRegion(this.value)"
+        style="border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.4rem .625rem;font-size:.82rem;background:#fff;">
+        <option value="Todas" ${regFilter === 'Todas' ? 'selected' : ''}>Todas as regiões</option>
+        ${sortedRegions.map(r => `<option value="${r.id}" ${regFilter === r.id ? 'selected' : ''}>${r.name}</option>`).join('')}
+      </select>
+      <select onchange="W.setParticipantFilterCat(this.value)"
+        style="border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.4rem .625rem;font-size:.82rem;background:#fff;">
+        ${['Todos', 'DBV', 'AVT'].map(c => `<option value="${c}" ${catFilter === c ? 'selected' : ''}>${c}</option>`).join('')}
+      </select>
+    </div>
+
+    ${filtered.length === 0
+      ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">👥</div><p style="font-weight:600;">Nenhum participante</p></div>`
+      : `<div style="display:flex;flex-direction:column;gap:.625rem;">
+        ${filtered.map(p => `
+        <div class="card" style="padding:1rem;overflow:visible;">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;">
+            <div style="flex:1;">
+              <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
+                <span style="background:${p.competitionCategory === 'AVT' ? '#d1fae5' : '#dbeafe'};
+                  color:${p.competitionCategory === 'AVT' ? '#065f46' : '#1d4ed8'};
+                  font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${p.competitionCategory || '—'}</span>
+                ${p.unitId ? `<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">Alocado em unidade</span>` : ''}
+              </div>
+              <div style="font-weight:700;color:#1e293b;">${p.name}</div>
+              <div style="font-size:.78rem;color:#64748b;">${p.club ? `${p.club} · ` : ''}${rname(p.regionId)}</div>
+            </div>
+            <div style="display:flex;gap:.375rem;flex-shrink:0;">
+              <button onclick="W.openParticipantForm('${p.id}')"
+                style="background:#eff6ff;border:none;color:#1d4ed8;padding:.5rem;border-radius:.625rem;cursor:pointer;">✏️</button>
+              ${isSuperAdmin() ? `<button onclick="W.deleteParticipant('${p.id}','${p.name}')"
+                style="background:#fef2f2;border:none;color:#dc2626;padding:.5rem;border-radius:.625rem;cursor:pointer;">🗑️</button>` : ''}
+            </div>
+          </div>
+        </div>`).join('')}
+      </div>`}
+  </div>`;
+}
+
+// ── TAB: UNIDADES ─────────────────────────────────────────────
+function tUnits() {
+  const regFilter = S.unitFilterRegion;
+  const filtered = S.units.filter(u => regFilter === 'Todas' || u.regionId === regFilter)
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const sortedRegions = [...S.regions].sort((a, b) => a.name.localeCompare(b.name));
+
+  return `
+  <div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;flex-wrap:wrap;gap:.5rem;">
+      <span style="font-weight:800;color:#1e293b;">Unidades (${filtered.length})</span>
+      <button onclick="W.openUnitForm(null)"
+        style="background:#0D2B6E;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Nova</button>
+    </div>
+
+    <div style="margin-bottom:.875rem;">
+      <select onchange="W.setUnitFilterRegion(this.value)"
+        style="border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.4rem .625rem;font-size:.82rem;background:#fff;">
+        <option value="Todas" ${regFilter === 'Todas' ? 'selected' : ''}>Todas as regiões</option>
+        ${sortedRegions.map(r => `<option value="${r.id}" ${regFilter === r.id ? 'selected' : ''}>${r.name}</option>`).join('')}
+      </select>
+    </div>
+
+    ${filtered.length === 0
+      ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">🏕️</div><p style="font-weight:600;">Nenhuma unidade cadastrada</p></div>`
+      : `<div style="display:flex;flex-direction:column;gap:.625rem;">
+        ${filtered.map(u => {
+          const members = S.participants.filter(p => p.unitId === u.id);
+          const guestCount = members.filter(p => p.regionId !== u.regionId).length;
+          const counselor = S.users.find(cu => cu.role === 'counselor' && cu.unitId === u.id);
+          return `
+          <div class="card" style="padding:1rem;overflow:visible;">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;">
+              <div style="flex:1;">
+                <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
+                  <span style="background:#f1f5f9;color:#475569;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${rname(u.regionId)}</span>
+                  <span style="background:#dbeafe;color:#1d4ed8;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${members.length} membro${members.length !== 1 ? 's' : ''}</span>
+                  ${guestCount > 0 ? `<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${guestCount} clube amigo</span>` : ''}
+                </div>
+                <div style="font-weight:700;color:#1e293b;">${u.name}</div>
+                ${u.warCry ? `<div style="font-size:.78rem;color:#64748b;margin-top:.15rem;">"${u.warCry}"</div>` : ''}
+              </div>
+              <div style="display:flex;gap:.375rem;flex-shrink:0;">
+                <button onclick="W.openUnitParticipants('${u.id}')"
+                  style="background:#f0fdf4;border:none;color:#166534;padding:.5rem;border-radius:.625rem;cursor:pointer;">👥</button>
+                <button onclick="W.openUnitForm('${u.id}')"
+                  style="background:#eff6ff;border:none;color:#1d4ed8;padding:.5rem;border-radius:.625rem;cursor:pointer;">✏️</button>
+                ${isSuperAdmin() ? `<button onclick="W.deleteUnit('${u.id}','${u.name}')"
+                  style="background:#fef2f2;border:none;color:#dc2626;padding:.5rem;border-radius:.625rem;cursor:pointer;">🗑️</button>` : ''}
+              </div>
+            </div>
+            <div style="margin-top:.75rem;padding-top:.625rem;border-top:1px solid #f1f5f9;display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;">
+              ${counselor
+                ? `<div style="font-size:.78rem;color:#64748b;">👤 Conselheiro: <strong>${counselor.name}</strong> (${counselor.username})</div>`
+                : `<div style="font-size:.78rem;color:#94a3b8;">Sem conselheiro vinculado</div>`}
+              ${!counselor ? `<button onclick="W.openCounselorForm('${u.id}')"
+                  style="background:#eff6ff;color:#1d4ed8;border:none;padding:.4rem .75rem;border-radius:.625rem;font-size:.78rem;font-weight:700;cursor:pointer;">+ Vincular Conselheiro</button>` : ''}
+            </div>
+          </div>`;
+        }).join('')}
       </div>`}
   </div>`;
 }
@@ -683,9 +834,12 @@ function mReqForm() {
 function mUserForm() {
   const u           = S.editingUser;
   const isEdit      = !!u?.id;
-  const roleOptions = Object.entries(ROLES).filter(([k]) => k !== 'region');
+  // 'region' e 'counselor' não são criáveis aqui: precisam de regionId/unitId,
+  // que só existem nos fluxos dedicados (aba Regiões / botão "Vincular Conselheiro" em Unidades)
+  const roleOptions = Object.entries(ROLES).filter(([k]) => k !== 'region' && k !== 'counselor');
   const role        = S.formRole || u?.role || null;
   const showRest    = isEdit || !!role;
+  const isCounselor = isEdit && u?.role === 'counselor';
   const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
 
   return `
@@ -693,13 +847,15 @@ function mUserForm() {
     <div class="modal-content" style="max-width:420px;">
       <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">${isEdit ? 'Editar' : 'Novo'} Usuário</h2>
       <div style="display:flex;flex-direction:column;gap:.875rem;">
-        <div>${lbl('Perfil *')}
+        ${isCounselor
+          ? `<div>${lbl('Perfil')}<div style="background:#f8fafc;border-radius:.875rem;padding:.875rem;font-weight:700;color:#374151;">🏕️ Conselheiro</div></div>`
+          : `<div>${lbl('Perfil *')}
           <select id="u-role" onchange="W.setFormRole(this.value)"
             style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
             ${!isEdit ? `<option value="" disabled ${!role ? 'selected' : ''}>Selecione o perfil...</option>` : ''}
             ${roleOptions.map(([k, v]) => `<option value="${k}" ${role === k ? 'selected' : ''}>${v}</option>`).join('')}
           </select>
-        </div>
+        </div>`}
         ${showRest ? `
         <div>${lbl('Nome completo *')}<input id="u-name" type="text" value="${u?.name || ''}" placeholder="João Silva"
           style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
@@ -797,6 +953,202 @@ function mRegionForm() {
   </div>`;
 }
 
+// ── MODAL: PARTICIPANTE ────────────────────────────────────────
+function mParticipantForm() {
+  const p = S.editingParticipant || {};
+  const isEdit = !!p.id;
+  const region = S.regions.find(r => r.id === p.regionId);
+  const sortedRegions = [...S.regions].sort((a, b) => a.name.localeCompare(b.name));
+  const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
+
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:420px;">
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">${isEdit ? 'Editar' : 'Novo'} Participante</h2>
+      <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>${lbl('Nome *')}<input id="pt-name" type="text" value="${p.name || ''}" placeholder="Nome completo"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Clube de origem')}<input id="pt-club" type="text" value="${p.club || ''}" placeholder="Ex: Águias Douradas"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Região *')}
+          <select id="pt-region" onchange="W.setParticipantRegion(this.value)"
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
+            <option value="" ${!p.regionId ? 'selected' : ''} disabled>Selecione a região...</option>
+            ${sortedRegions.map(r => `<option value="${r.id}" ${p.regionId === r.id ? 'selected' : ''}>${r.name}</option>`).join('')}
+          </select>
+        </div>
+        ${region ? `<div style="background:#f8fafc;border-radius:.875rem;padding:.75rem 1rem;font-size:.82rem;color:#64748b;">
+          Modalidade: <strong>${region.competitionCategory || 'DBV'}</strong> (derivada da região selecionada)
+        </div>` : ''}
+        <button onclick="W.saveParticipant()" ${S.loading ? 'disabled' : ''}
+          style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          ${S.loading ? '⏳ Salvando...' : (isEdit ? '💾 Salvar' : '+ Criar Participante')}
+        </button>
+      </div>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: IMPORTAR PARTICIPANTES (CSV/Excel) ──────────────────
+function mParticipantImport() {
+  const rows = S.importRows;
+  const errors = S.importErrors;
+  const hasResults = rows.length > 0 || errors.length > 0;
+
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content">
+      <div style="width:2.5rem;height:.25rem;background:#e2e8f0;border-radius:999px;margin:0 auto .875rem;"></div>
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 .5rem;">📥 Importar Participantes</h2>
+      <p style="font-size:.82rem;color:#64748b;margin:0 0 1rem;">
+        Arquivo CSV ou Excel com colunas: <strong>Nome, Clube, Região, Modalidade</strong><br>
+        <span style="font-size:.75rem;color:#94a3b8;">A região precisa bater com o nome cadastrado — a modalidade é derivada dela automaticamente.</span>
+      </p>
+      <div class="upload-area" onclick="document.getElementById('import-file').click()" style="margin-bottom:1rem;">
+        <div style="font-size:2rem;margin-bottom:.5rem;">📄</div>
+        <div style="font-weight:700;color:#374151;">Toque para selecionar o arquivo</div>
+        <div style="font-size:.78rem;color:#9ca3af;margin-top:.3rem;">.csv, .xlsx ou .xls</div>
+      </div>
+      <input type="file" id="import-file" accept=".csv,.xlsx,.xls" onchange="W.handleImportFile(event)">
+
+      ${hasResults ? `
+      <div style="display:flex;gap:.5rem;margin-bottom:.75rem;flex-wrap:wrap;">
+        <span style="background:#d1fae5;color:#065f46;font-size:.78rem;font-weight:700;padding:.3rem .75rem;border-radius:999px;">✅ ${rows.length} válido${rows.length !== 1 ? 's' : ''}</span>
+        ${errors.length ? `<span style="background:#fee2e2;color:#991b1b;font-size:.78rem;font-weight:700;padding:.3rem .75rem;border-radius:999px;">⚠️ ${errors.length} com erro</span>` : ''}
+      </div>
+      <div style="max-height:220px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:.75rem;margin-bottom:1rem;">
+        ${rows.map(r => `<div style="padding:.5rem .75rem;border-bottom:1px solid #f1f5f9;font-size:.82rem;">
+          <strong>${r.name}</strong> — ${r.club || '—'} · ${rname(r.regionId)} (${r.competitionCategory})
+        </div>`).join('')}
+        ${errors.map(e => `<div style="padding:.5rem .75rem;border-bottom:1px solid #f1f5f9;font-size:.82rem;color:#dc2626;">
+          ⚠️ Linha ${e.row}: ${e.reason}
+        </div>`).join('')}
+      </div>
+      <button onclick="W.confirmImport()" ${S.loading || rows.length === 0 ? 'disabled' : ''}
+        style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${(S.loading || rows.length === 0) ? .6 : 1};">
+        ${S.loading ? '⏳ Importando...' : `+ Importar ${rows.length} participante${rows.length !== 1 ? 's' : ''}`}
+      </button>` : ''}
+
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: UNIDADE ──────────────────────────────────────────────
+function mUnitForm() {
+  const u = S.editingUnit || {};
+  const isEdit = !!u.id;
+  const sortedRegions = [...S.regions].sort((a, b) => a.name.localeCompare(b.name));
+  const countIn = rid => S.units.filter(x => x.regionId === rid && x.id !== u.id).length;
+  const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
+
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:420px;">
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">${isEdit ? 'Editar' : 'Nova'} Unidade</h2>
+      <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>${lbl('Nome *')}<input id="un-name" type="text" value="${u.name || ''}" placeholder="Ex: Águias"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Grito de guerra')}<input id="un-warcry" type="text" value="${u.warCry || ''}" placeholder="Ex: Águias voam alto!"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Região *')}
+          <select id="un-region" ${isEdit ? 'disabled' : ''}
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:${isEdit ? '#f8fafc' : '#fff'};">
+            <option value="" ${!u.regionId ? 'selected' : ''} disabled>Selecione a região...</option>
+            ${sortedRegions.map(r => {
+              const count = countIn(r.id);
+              const full = count >= 3 && r.id !== u.regionId;
+              return `<option value="${r.id}" ${u.regionId === r.id ? 'selected' : ''} ${full ? 'disabled' : ''}>${r.name} (${count}/3)${full ? ' — cheia' : ''}</option>`;
+            }).join('')}
+          </select>
+        </div>
+        ${isEdit ? `<div style="font-size:.75rem;color:#94a3b8;">A região de uma unidade não pode ser alterada depois de criada.</div>` : ''}
+        <button onclick="W.saveUnit()" ${S.loading ? 'disabled' : ''}
+          style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          ${S.loading ? '⏳ Salvando...' : (isEdit ? '💾 Salvar' : '+ Criar Unidade')}
+        </button>
+      </div>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: ALOCAR PARTICIPANTES NA UNIDADE ─────────────────────
+function mUnitParticipants() {
+  const unit = S.units.find(u => u.id === S.editingUnit?.id) || S.editingUnit;
+  if (!unit) return '';
+  const search = (S.unitParticipantSearch || '').toLowerCase();
+  const list = S.participants
+    .filter(p => !search || (p.name || '').toLowerCase().includes(search))
+    .sort((a, b) => {
+      const aIn = a.unitId === unit.id, bIn = b.unitId === unit.id;
+      if (aIn !== bIn) return aIn ? -1 : 1;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content">
+      <div style="width:2.5rem;height:.25rem;background:#e2e8f0;border-radius:999px;margin:0 auto .875rem;"></div>
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 .25rem;">👥 ${unit.name}</h2>
+      <p style="font-size:.82rem;color:#64748b;margin:0 0 1rem;">Selecione os participantes desta unidade — participantes de outras regiões podem ser alocados como "clube amigo".</p>
+      <input type="text" placeholder="🔎 Buscar participante..." value="${S.unitParticipantSearch || ''}"
+        oninput="W.setUnitParticipantSearch(this.value)"
+        style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.75rem;font-size:.9rem;outline:none;margin-bottom:.875rem;">
+      <div style="max-height:50vh;overflow-y:auto;display:flex;flex-direction:column;gap:.375rem;">
+        ${list.length === 0 ? `<p style="text-align:center;color:#94a3b8;padding:1.5rem;">Nenhum participante encontrado</p>` : list.map(p => {
+          const inThis  = p.unitId === unit.id;
+          const inOther = !!p.unitId && !inThis;
+          const isGuest = p.regionId !== unit.regionId;
+          return `
+          <label style="display:flex;align-items:center;gap:.75rem;padding:.625rem .75rem;border-radius:.75rem;background:${inThis ? '#f0fdf4' : '#f8fafc'};cursor:pointer;">
+            <input type="checkbox" ${inThis ? 'checked' : ''} onchange="W.toggleUnitParticipant('${p.id}', this.checked)" style="width:1.1rem;height:1.1rem;flex-shrink:0;">
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:600;color:#1e293b;font-size:.88rem;">${p.name}${isGuest ? ' <span style="color:#92400e;font-size:.75rem;">(clube amigo)</span>' : ''}</div>
+              <div style="font-size:.75rem;color:#94a3b8;">${p.club ? `${p.club} · ` : ''}${rname(p.regionId)}${inOther ? ' · já em outra unidade' : ''}</div>
+            </div>
+          </label>`;
+        }).join('')}
+      </div>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:1rem;padding:.875rem;background:#0D2B6E;color:#fff;border:none;border-radius:1rem;font-weight:700;cursor:pointer;">Concluído</button>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: VINCULAR CONSELHEIRO ────────────────────────────────
+function mCounselorForm() {
+  const unit = S.units.find(u => u.id === S.counselorUnitId);
+  const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
+
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:400px;">
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 .25rem;">Vincular Conselheiro</h2>
+      <p style="font-size:.82rem;color:#64748b;margin:0 0 1.25rem;">Unidade: <strong>${unit?.name || '—'}</strong></p>
+      <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>${lbl('Nome completo *')}<input id="cn-name" type="text" placeholder="Nome do conselheiro"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Telefone')}<input id="cn-phone" type="tel" placeholder="(11) 99999-9999"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div style="background:#f8fafc;border-radius:.875rem;padding:.75rem 1rem;font-size:.8rem;color:#64748b;">
+          🔑 Login e senha serão gerados automaticamente a partir do nome
+        </div>
+        <button onclick="W.saveCounselor()" ${S.loading ? 'disabled' : ''}
+          style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          ${S.loading ? '⏳ Salvando...' : '+ Vincular Conselheiro'}
+        </button>
+      </div>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
 // ── MODAL: CREDENCIAIS GERADAS (região ou usuário) ─────────────
 function mCredentialsModal() {
   const { title, username, password } = S.createdCreds || {};
@@ -863,13 +1215,16 @@ function mChangePassword() {
 // ── ACTIONS ───────────────────────────────────────────────────
 window.W = {
   logout() {
-    if (_unsubReqs)    _unsubReqs();
-    if (_unsubSubs)    _unsubSubs();
-    if (_unsubRegions) _unsubRegions();
+    if (_unsubReqs)         _unsubReqs();
+    if (_unsubSubs)         _unsubSubs();
+    if (_unsubRegions)      _unsubRegions();
+    if (_unsubParticipants) _unsubParticipants();
+    if (_unsubUnits)        _unsubUnits();
     authLogout();
   },
 
-  setTab(tab)      { S.adminTab = tab; render(); },
+  setTab(tab)      { S.adminTab = tab; S.sidebarOpen = false; render(); },
+  toggleSidebar(open) { S.sidebarOpen = open; render(); },
   closeModal()     { S.modal = null; render(); },
   closeCredentials() { S.modal = null; S.createdCreds = null; render(); },
   copyCred(field) {
@@ -973,7 +1328,8 @@ window.W = {
   async saveUser() {
     const name     = document.getElementById('u-name')?.value?.trim();
     const phone    = document.getElementById('u-phone')?.value?.trim();
-    const role     = document.getElementById('u-role')?.value;
+    // Conselheiro não mostra o select de perfil (é fixo) — mantém o role atual do usuário
+    const role     = document.getElementById('u-role')?.value || S.editingUser?.role;
     const judgeCat = document.getElementById('u-cat')?.value || null;
     const pwd      = document.getElementById('u-pwd')?.value || S.generatedPwd;
     if (!name || !role) { toast('Nome e perfil são obrigatórios', 'error'); return; }
@@ -1056,6 +1412,172 @@ window.W = {
     if (!confirm(`Excluir a região "${name}"?\n\nIsso também excluirá o usuário/login vinculado.\nEsta ação não pode ser desfeita.`)) return;
     const linkedUser = S.users.find(u => u.regionId === id && u.role === 'region');
     apiDelRegion(id, linkedUser?.id, getToken()).then(() => { toast('Região e usuário excluídos.', 'info'); refreshUsers(); });
+  },
+
+  // ── Participantes ──────────────────────────────────────────
+  setParticipantFilterRegion(v) { S.participantFilterRegion = v; render(); },
+  setParticipantFilterCat(v)    { S.participantFilterCat = v; render(); },
+  openParticipantForm(id) {
+    S.editingParticipant = id ? { ...S.participants.find(p => p.id === id) } : {};
+    S.modal = 'participant-form'; render();
+  },
+  setParticipantRegion(regionId) {
+    S.editingParticipant = { ...S.editingParticipant, regionId };
+    render();
+  },
+  async saveParticipant() {
+    const name   = document.getElementById('pt-name')?.value?.trim();
+    const club   = document.getElementById('pt-club')?.value?.trim();
+    const regionId = document.getElementById('pt-region')?.value;
+    if (!name || !regionId) { toast('Nome e região são obrigatórios', 'error'); return; }
+    const region = S.regions.find(r => r.id === regionId);
+    const competitionCategory = region?.competitionCategory || 'DBV';
+    S.loading = true; render();
+    try {
+      if (S.editingParticipant?.id) {
+        await updateParticipant(S.editingParticipant.id, { name, club: club || '', regionId, competitionCategory });
+        toast('Participante atualizado! ✅');
+      } else {
+        await createParticipant({ name, club: club || '', regionId, competitionCategory });
+        toast('Participante criado! ✅');
+      }
+      S.modal = null; S.editingParticipant = null;
+    } catch (e) { toast(e.message || 'Erro ao salvar.', 'error'); }
+    S.loading = false; render();
+  },
+  deleteParticipant(id, name) {
+    if (!confirm(`Excluir permanentemente o participante "${name}"?\n\nEsta ação não pode ser desfeita.`)) return;
+    apiDeleteParticipant(id).then(() => toast('Participante excluído.', 'info'));
+  },
+
+  openParticipantImport() {
+    S.importRows = []; S.importErrors = [];
+    S.modal = 'participant-import'; render();
+  },
+  handleImportFile(evt) {
+    const file = evt.target.files[0];
+    if (!file) return;
+    if (typeof window.XLSX === 'undefined') { toast('Biblioteca XLSX não carregada', 'error'); return; }
+    const isCsv = /\.csv$/i.test(file.name);
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        // CSV é lido como texto UTF-8 (readAsText); type:'array' em CSV faz o SheetJS
+        // tratar os bytes como binário/latin1 e corromper acentuação (ex: "João" → "JoÃ£o")
+        const wb = isCsv
+          ? window.XLSX.read(e.target.result, { type: 'string' })
+          : window.XLSX.read(e.target.result, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+        if (rows.length < 2) { toast('Arquivo vazio ou sem dados', 'error'); return; }
+
+        const headers  = rows[0].map(h => String(h).trim().toLowerCase());
+        const idxName   = headers.findIndex(h => h.includes('nome'));
+        const idxClub   = headers.findIndex(h => h.includes('clube'));
+        const idxRegion = headers.findIndex(h => h.includes('regi'));
+
+        const valid = [];
+        const errors = [];
+        rows.slice(1).forEach((row, i) => {
+          const rowNum = i + 2;
+          const name       = idxName   >= 0 ? String(row[idxName]   || '').trim() : '';
+          const club       = idxClub   >= 0 ? String(row[idxClub]   || '').trim() : '';
+          const regionName = idxRegion >= 0 ? String(row[idxRegion] || '').trim() : '';
+          if (!name && !club && !regionName) return; // linha em branco, ignora
+          if (!name)       { errors.push({ row: rowNum, reason: 'nome vazio' }); return; }
+          if (!regionName) { errors.push({ row: rowNum, reason: `"${name}": região vazia` }); return; }
+          const region = S.regions.find(r => r.name.toLowerCase() === regionName.toLowerCase());
+          if (!region)     { errors.push({ row: rowNum, reason: `"${name}": região "${regionName}" não encontrada` }); return; }
+          valid.push({ name, club, regionId: region.id, competitionCategory: region.competitionCategory || 'DBV' });
+        });
+
+        S.importRows = valid;
+        S.importErrors = errors;
+        render();
+      } catch (err) {
+        toast('Erro ao ler arquivo: ' + err.message, 'error');
+      }
+    };
+    if (isCsv) reader.readAsText(file, 'UTF-8');
+    else reader.readAsArrayBuffer(file);
+  },
+  async confirmImport() {
+    if (S.importRows.length === 0) return;
+    S.loading = true; render();
+    try {
+      const count = await createParticipantsBulk(S.importRows);
+      toast(`✅ ${count} participante${count !== 1 ? 's' : ''} importado${count !== 1 ? 's' : ''}!`);
+      S.modal = null; S.importRows = []; S.importErrors = [];
+    } catch (e) { toast(e.message || 'Erro ao importar.', 'error'); }
+    S.loading = false; render();
+  },
+
+  // ── Unidades ───────────────────────────────────────────────
+  setUnitFilterRegion(v) { S.unitFilterRegion = v; render(); },
+  openUnitForm(id) {
+    S.editingUnit = id ? { ...S.units.find(u => u.id === id) } : {};
+    S.modal = 'unit-form'; render();
+  },
+  async saveUnit() {
+    const name     = document.getElementById('un-name')?.value?.trim();
+    const warCry   = document.getElementById('un-warcry')?.value?.trim();
+    const regionId = document.getElementById('un-region')?.value;
+    if (!name || !regionId) { toast('Nome e região são obrigatórios', 'error'); return; }
+    const isEdit = !!S.editingUnit?.id;
+    if (!isEdit && S.units.filter(u => u.regionId === regionId).length >= 3) {
+      toast('Esta região já tem 3 unidades (limite máximo)', 'error'); return;
+    }
+    S.loading = true; render();
+    try {
+      if (isEdit) {
+        await updateUnit(S.editingUnit.id, { name, warCry: warCry || '' });
+        toast('Unidade atualizada! ✅');
+      } else {
+        await createUnit({ name, warCry: warCry || '', regionId });
+        toast('Unidade criada! ✅');
+      }
+      S.modal = null; S.editingUnit = null;
+    } catch (e) { toast(e.message || 'Erro ao salvar.', 'error'); }
+    S.loading = false; render();
+  },
+  deleteUnit(id, name) {
+    if (!confirm(`Excluir a unidade "${name}"?\n\nOs participantes alocados serão desvinculados (não excluídos).\nEsta ação não pode ser desfeita.`)) return;
+    const memberIds = S.participants.filter(p => p.unitId === id).map(p => p.id);
+    apiDeleteUnit(id, memberIds).then(() => toast('Unidade excluída.', 'info'));
+  },
+  openUnitParticipants(id) {
+    S.editingUnit = S.units.find(u => u.id === id);
+    S.unitParticipantSearch = '';
+    S.modal = 'unit-participants'; render();
+  },
+  setUnitParticipantSearch(v) { S.unitParticipantSearch = v; render(); },
+  toggleUnitParticipant(participantId, checked) {
+    allocateParticipant(participantId, checked ? S.editingUnit.id : null)
+      .catch(e => toast(e.message || 'Erro ao alocar participante', 'error'));
+  },
+
+  openCounselorForm(unitId) {
+    S.counselorUnitId = unitId;
+    S.modal = 'counselor-form'; render();
+  },
+  async saveCounselor() {
+    const name  = document.getElementById('cn-name')?.value?.trim();
+    const phone = document.getElementById('cn-phone')?.value?.trim();
+    if (!name) { toast('Nome é obrigatório', 'error'); return; }
+    const unit   = S.units.find(u => u.id === S.counselorUnitId);
+    const region = S.regions.find(r => r.id === unit?.regionId);
+    S.loading = true; render();
+    try {
+      const { username, password } = await createUser({
+        name, phone: phone || '', role: 'counselor',
+        unitId: S.counselorUnitId, regionId: unit?.regionId || null,
+        competitionCategory: region?.competitionCategory || 'DBV'
+      }, getToken());
+      S.createdCreds = { title: 'Conselheiro vinculado!', username, password };
+      S.modal = 'credentials';
+      await refreshUsers();
+    } catch (e) { toast(e.message || 'Erro ao vincular.', 'error'); }
+    S.loading = false; render();
   },
 
   // ── Senha ──────────────────────────────────────────────────

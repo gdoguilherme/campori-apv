@@ -12,7 +12,7 @@ export const setRegionCache = regions => { _regionCache = regions; };
 export const CATEGORIES = ['ADM','Nas Casas','Nos Templos','Nas Ruas','Acampamento','Cozinha','Saúde','Eventos','Outros'];
 export const PHASES = ['Pré-Requisito','No Campori'];
 // 'judge' mantido no DB para retrocompatibilidade; exibido como 'Fiscal de Prova'
-export const ROLES = { superadmin:'Super Admin', admin:'Administrador', approver:'Aprovador', judge:'Fiscal de Prova', region:'Região' };
+export const ROLES = { superadmin:'Super Admin', admin:'Administrador', approver:'Aprovador', judge:'Fiscal de Prova', region:'Região', counselor:'Conselheiro' };
 export const COMP_CATS = ['Ambos','DBV','AVT'];
 export const SCORE_PCTS = [0, 30, 50, 70, 100];
 export const UPLOAD_SERVER = 'https://campori-apv-upload.fly.dev';
@@ -116,6 +116,37 @@ export function subRegions(onUpdate) {
   return onSnapshot(q,
     snap => onUpdate(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
     err => toast('Erro ao carregar regiões: ' + err.message, 'error')
+  );
+}
+
+export function subParticipants(onUpdate) {
+  return onSnapshot(collection(db, 'participants'),
+    snap => onUpdate(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+    err => toast('Erro ao carregar participantes: ' + err.message, 'error')
+  );
+}
+
+export function subUnits(onUpdate) {
+  return onSnapshot(collection(db, 'units'),
+    snap => onUpdate(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+    err => toast('Erro ao carregar unidades: ' + err.message, 'error')
+  );
+}
+
+// Usado pelo portal do Conselheiro (uma única unidade em tempo real)
+export function subUnitById(unitId, onUpdate) {
+  return onSnapshot(doc(db, 'units', unitId),
+    snap => onUpdate(snap.exists() ? { id: snap.id, ...snap.data() } : null),
+    err => toast('Erro ao carregar unidade: ' + err.message, 'error')
+  );
+}
+
+// Usado pelo portal do Conselheiro (participantes só da unidade dele)
+export function subParticipantsByUnit(unitId, onUpdate) {
+  const q = query(collection(db, 'participants'), where('unitId', '==', unitId));
+  return onSnapshot(q,
+    snap => onUpdate(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+    err => toast('Erro ao carregar participantes: ' + err.message, 'error')
   );
 }
 
@@ -273,9 +304,6 @@ export async function deleteUser(id, token) {
 // ── REGIONS ───────────────────────────────────────────────────
 // (username/slugify agora vivem no backend — ver server/routes/users.js)
 
-
-
-
 // Cria a região e o usuário/login vinculado automaticamente (login a partir do nome do responsável)
 export async function createRegion(data, token) {
   const regRef = await addDoc(collection(db, 'regions'), {
@@ -312,6 +340,67 @@ export async function updateRegion(id, data, linkedUserId, password, token) {
 export async function delRegion(id, linkedUserId, token) {
   await deleteDoc(doc(db, 'regions', id));
   if (linkedUserId) await apiFetch(`/users/${linkedUserId}`, { method: 'DELETE', token });
+}
+
+// ── PARTICIPANTS ──────────────────────────────────────────────
+
+export async function createParticipant(data) {
+  await addDoc(collection(db, 'participants'), {
+    name: data.name, club: data.club || '', regionId: data.regionId,
+    competitionCategory: data.competitionCategory, unitId: data.unitId || null,
+    createdAt: serverTimestamp()
+  });
+}
+
+export async function updateParticipant(id, data) {
+  await updateDoc(doc(db, 'participants', id), data);
+}
+
+export async function deleteParticipant(id) {
+  await deleteDoc(doc(db, 'participants', id));
+}
+
+// Import em massa (CSV/Excel já parseado no client) — grava sequencialmente,
+// retorna quantos foram criados com sucesso
+export async function createParticipantsBulk(list) {
+  let count = 0;
+  for (const p of list) {
+    await createParticipant(p);
+    count++;
+  }
+  return count;
+}
+
+// ── UNITS ─────────────────────────────────────────────────────
+// Unidades são mistas (participantes DBV e AVT juntos) e podem receber
+// participantes de outras regiões ("clube amigo"). A lista de membros é
+// derivada de participant.unitId — não existe um array participantIds
+// redundante no doc da unidade, pra não correr risco dos dois lados
+// saírem de sincronia.
+
+export async function createUnit(data) {
+  const ref = await addDoc(collection(db, 'units'), {
+    name: data.name, warCry: data.warCry || '', regionId: data.regionId,
+    counselorId: null, createdAt: serverTimestamp()
+  });
+  return ref.id;
+}
+
+export async function updateUnit(id, data) {
+  await updateDoc(doc(db, 'units', id), data);
+}
+
+// Exclui a unidade e desaloca (unitId = null) os participantes que estavam nela
+export async function deleteUnit(id, participantIds) {
+  await deleteDoc(doc(db, 'units', id));
+  for (const pid of participantIds) {
+    await updateDoc(doc(db, 'participants', pid), { unitId: null });
+  }
+}
+
+// Aloca (ou remove, com unitId = null) um participante a uma unidade
+export async function allocateParticipant(participantId, unitId) {
+  await updateDoc(doc(db, 'participants', participantId), { unitId });
 }
 
 // ── SUBMISSIONS ───────────────────────────────────────────────

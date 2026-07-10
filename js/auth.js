@@ -51,6 +51,7 @@ export function portalUrlForUser(user) {
   if (user.role === 'region') {
     return user.competitionCategory === 'AVT' ? '/pages/regiao/avt.html' : '/pages/regiao/dbv.html';
   }
+  if (user.role === 'counselor') return '/pages/conselheiro.html';
   return '/pages/login.html';
 }
 

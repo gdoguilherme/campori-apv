@@ -1,7 +1,8 @@
 import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatcher } from './auth.js';
 import {
   subUnitById, subParticipantsByUnit, subRegions, setRegionCache, subReqs, subSubsByUnit,
-  rname, toast, showBanner, updatePassword, addSubmission, uploadFile, updateSubmissionProof, reqFilledBy
+  rname, toast, showBanner, updatePassword, addSubmission, uploadFile, updateSubmissionProof, reqFilledBy,
+  subUnits, subSubs, computeUnitScores, renderAnonRanking
 } from './api.js';
 
 // ── CONFIGURAÇÃO POR MODALIDADE (herdada da região da unidade) ──
@@ -17,6 +18,8 @@ const S = {
   participants: [],
   requirements: [],
   submissions: [],
+  allSubmissions: [], // todas as submissions do sistema — só pro ranking geral anônimo
+  units: [],
   selectedReq: null,
   photoFile: null,
   photoUrl: null,
@@ -24,7 +27,8 @@ const S = {
   loading: false,
 };
 
-let _unsubUnit = null, _unsubParticipants = null, _unsubRegions = null, _unsubReqs = null, _unsubSubs = null;
+let _unsubUnit = null, _unsubParticipants = null, _unsubRegions = null, _unsubReqs = null, _unsubSubs = null,
+    _unsubAllUnits = null, _unsubAllSubs = null;
 
 // ── INIT ──────────────────────────────────────────────────────
 export function init() {
@@ -33,8 +37,10 @@ export function init() {
   S.user = user;
   startExpiryWatcher();
 
-  _unsubRegions = subRegions(regs => { setRegionCache(regs); render(); });
-  _unsubReqs    = subReqs(reqs => { S.requirements = reqs; render(); });
+  _unsubRegions  = subRegions(regs => { setRegionCache(regs); render(); });
+  _unsubReqs     = subReqs(reqs => { S.requirements = reqs; render(); });
+  _unsubAllUnits = subUnits(units => { S.units = units; render(); });
+  _unsubAllSubs  = subSubs(null, subs => { S.allSubmissions = subs; render(); });
 
   if (user.unitId) {
     _unsubUnit         = subUnitById(user.unitId, unit => { S.unit = unit; render(); });
@@ -173,6 +179,14 @@ function vPortal() {
               : ''}
           </div>
         </div>`).join('')}
+    </div>
+
+    <!-- RANKING GERAL (anônimo, por unidade) -->
+    <div style="padding:0 1rem 5rem;">
+      <div class="card" style="padding:1rem;">
+        <div style="font-weight:800;color:#1e293b;font-size:.9rem;margin-bottom:.75rem;">🏆 Ranking Geral das Unidades</div>
+        ${renderAnonRanking(computeUnitScores(S.allSubmissions, S.units))}
+      </div>
     </div>
   </div>`;
 }
@@ -350,6 +364,8 @@ window.W = {
     if (_unsubRegions)      _unsubRegions();
     if (_unsubReqs)         _unsubReqs();
     if (_unsubSubs)         _unsubSubs();
+    if (_unsubAllUnits)     _unsubAllUnits();
+    if (_unsubAllSubs)      _unsubAllSubs();
     authLogout();
   },
 

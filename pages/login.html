@@ -18,11 +18,12 @@
 
 <script type="module">
 import { guardLogin, saveSession, portalUrlForUser } from '../js/auth.js';
-import { loginUser, ensureInitialAdmin, toast } from '../js/api.js';
+import { loginUser, ensureInitialAdmin, toast, fetchPublicRanking, renderAnonRanking } from '../js/api.js';
 
 const app = document.getElementById('app');
 let loading = false;
 let firstRunPwd = null;
+let rankingHtml = null;
 
 // Se já autenticado, redireciona imediatamente para o portal
 if (guardLogin()) {
@@ -36,6 +37,13 @@ async function init() {
     firstRunPwd = await ensureInitialAdmin();
   } catch (e) {
     console.warn('Erro ao verificar usuários:', e);
+  }
+  render();
+  try {
+    const scores = await fetchPublicRanking();
+    rankingHtml = renderAnonRanking(scores);
+  } catch (e) {
+    console.warn('Erro ao carregar ranking público:', e);
   }
   render();
 }
@@ -83,6 +91,12 @@ function render() {
         </button>
       </div>
     </div>
+
+    ${rankingHtml ? `
+    <div style="background:rgba(255,255,255,.95);border-radius:1.25rem;padding:1.25rem;width:100%;max-width:340px;margin-top:1.25rem;">
+      <div style="font-weight:800;color:#1e293b;font-size:.9rem;margin-bottom:.75rem;text-align:center;">🏆 Ranking Geral das Unidades</div>
+      ${rankingHtml}
+    </div>` : ''}
   </div>`;
 }
 

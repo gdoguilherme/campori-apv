@@ -1,5 +1,5 @@
 import {
-  db, collection, doc, addDoc, updateDoc, deleteDoc,
+  db, collection, doc, addDoc, updateDoc, deleteDoc, getDocs,
   query, where, orderBy, onSnapshot, serverTimestamp
 } from './firebase.js';
 
@@ -481,4 +481,49 @@ export function computeUnitScores(submissions, units) {
     });
 
   return Object.entries(scores).map(([id, v]) => ({ id, ...v })).sort((a, b) => b.total - a.total);
+}
+
+// ── ESTRELAS / RANKING ANÔNIMO ─────────────────────────────────
+
+// Classificação relativa à maior pontuação (não a um total fixo de pontos possíveis):
+// ⭐⭐⭐ 80-100% · ⭐⭐ 60-79% · ⭐ abaixo de 59%
+export function computeStars(total, maxTotal) {
+  if (!maxTotal || total <= 0) return 0;
+  const pct = (total / maxTotal) * 100;
+  if (pct >= 80) return 3;
+  if (pct >= 60) return 2;
+  return 1;
+}
+
+// HTML do ranking anônimo (posição + pontos + estrelas, sem nome/região) —
+// reaproveitado no login, portal da região e portal do conselheiro
+export function renderAnonRanking(scores, limit = 10) {
+  const withPts = scores.filter(s => s.total > 0);
+  if (withPts.length === 0) {
+    return `<p style="text-align:center;color:#94a3b8;font-size:.85rem;padding:1rem 0;">Ainda sem pontuação registrada</p>`;
+  }
+  const max = withPts[0].total;
+  return withPts.slice(0, limit).map((s, i) => {
+    const stars = computeStars(s.total, max);
+    return `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;
+      padding:.625rem .875rem;border-radius:.75rem;background:${i < 3 ? '#f0fdf4' : '#f8fafc'};margin-bottom:.375rem;">
+      <span style="font-weight:700;color:#1e293b;font-size:.85rem;">${i + 1}º lugar</span>
+      <span style="font-weight:800;color:#166534;font-size:.85rem;">${s.total} pts</span>
+      <span style="font-size:.85rem;">${'⭐'.repeat(stars)}${'☆'.repeat(3 - stars)}</span>
+    </div>`;
+  }).join('');
+}
+
+// Leitura pontual (sem listener em tempo real) usada na tela de login, que não
+// mantém sessão nem precisa de atualização ao vivo — regions/submissions/units
+// já são coleções abertas no Firestore (ver firestore.rules)
+export async function fetchPublicRanking() {
+  const [subsSnap, unitsSnap] = await Promise.all([
+    getDocs(collection(db, 'submissions')),
+    getDocs(collection(db, 'units'))
+  ]);
+  const submissions = subsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const units = unitsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return computeUnitScores(submissions, units);
 }

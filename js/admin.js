@@ -8,7 +8,7 @@ import {
   createRegion as apiCreateRegion, updateRegion as apiUpdateRegion, delRegion as apiDelRegion,
   createParticipant, updateParticipant, deleteParticipant as apiDeleteParticipant, createParticipantsBulk,
   createUnit, updateUnit, deleteUnit as apiDeleteUnit, allocateParticipant,
-  computeUnitScores,
+  computeUnitScores, computeStars,
   CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS, AREAS_ATUACAO, FILLED_BY
 } from './api.js';
 
@@ -472,6 +472,7 @@ function tRanking() {
           <div style="font-weight:800;color:#1e293b;font-size:.8rem;">${top3[1]?.name}</div>
           <div style="color:#94a3b8;font-size:.65rem;">${rname(top3[1]?.regionId)}</div>
           <div style="color:#64748b;font-size:.75rem;font-weight:600;">${top3[1]?.total} pts</div>
+          <div style="font-size:.7rem;">${'⭐'.repeat(computeStars(top3[1]?.total, max))}</div>
         </div>
       </div>
       <div style="flex:1;text-align:center;">
@@ -480,6 +481,7 @@ function tRanking() {
           <div style="font-weight:800;color:#1e293b;font-size:.85rem;">${top3[0]?.name}</div>
           <div style="color:#94a3b8;font-size:.65rem;">${rname(top3[0]?.regionId)}</div>
           <div style="color:#D4A017;font-size:.8rem;font-weight:800;">${top3[0]?.total} pts</div>
+          <div style="font-size:.75rem;">${'⭐'.repeat(computeStars(top3[0]?.total, max))}</div>
         </div>
       </div>
       <div style="flex:1;text-align:center;">
@@ -488,6 +490,7 @@ function tRanking() {
           <div style="font-weight:800;color:#1e293b;font-size:.8rem;">${top3[2]?.name}</div>
           <div style="color:#94a3b8;font-size:.65rem;">${rname(top3[2]?.regionId)}</div>
           <div style="color:#dc2626;font-size:.75rem;font-weight:600;">${top3[2]?.total} pts</div>
+          <div style="font-size:.7rem;">${'⭐'.repeat(computeStars(top3[2]?.total, max))}</div>
         </div>
       </div>
     </div>` : ''}
@@ -513,7 +516,10 @@ function tRanking() {
             <div style="background:#e2e8f0;border-radius:999px;height:.4rem;">
               <div style="background:#16a34a;border-radius:999px;height:.4rem;width:${Math.round((s.total / max) * 100)}%;"></div>
             </div>
-            ${s.count > 0 ? `<div style="font-size:.7rem;color:#94a3b8;margin-top:.2rem;">${s.count} aprovação${s.count !== 1 ? 'ões' : ''}</div>` : ''}
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:.2rem;">
+              ${s.count > 0 ? `<div style="font-size:.7rem;color:#94a3b8;">${s.count} aprovação${s.count !== 1 ? 'ões' : ''}</div>` : '<div></div>'}
+              ${s.total > 0 ? `<div style="font-size:.7rem;">${'⭐'.repeat(computeStars(s.total, max))}</div>` : ''}
+            </div>
           </div>
         </div>`).join('')}
     </div>

@@ -2,6 +2,7 @@ import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatc
 import {
   subReqs, subSubs, subRegions, setRegionCache, rname, fmtDate, toast, showBanner,
   addSubmission, uploadFile, updateSubmissionProof, updatePassword, reqFilledBy,
+  subUnits, computeUnitScores, renderAnonRanking,
   CATEGORIES
 } from './api.js';
 
@@ -31,6 +32,8 @@ const S = {
   theme: 'dbv',
   requirements: [],
   submissions: [],
+  allSubmissions: [], // todas as submissions do sistema — só pro ranking geral anônimo
+  units: [],
   filterCat: 'Todos',
   selectedReq: null,
   photoFile: null,
@@ -39,7 +42,7 @@ const S = {
   loading: false,
 };
 
-let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null;
+let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null, _unsubAllSubs = null, _unsubUnits = null;
 
 // ── INIT ──────────────────────────────────────────────────────
 export function init(theme) {
@@ -61,6 +64,8 @@ export function init(theme) {
   _unsubReqs    = subReqs(reqs => { S.requirements = reqs; render(); });
   _unsubSubs    = subSubs(user.regionId, subs => { S.submissions = subs; render(); });
   _unsubRegions = subRegions(regs => { setRegionCache(regs); render(); });
+  _unsubAllSubs = subSubs(null, subs => { S.allSubmissions = subs; render(); });
+  _unsubUnits   = subUnits(units => { S.units = units; render(); });
 
   render();
 }
@@ -183,13 +188,21 @@ function vPortal() {
     </div>
 
     <!-- LISTA DE REQUISITOS -->
-    <div style="padding:1rem;display:flex;flex-direction:column;gap:.75rem;padding-bottom:5rem;">
+    <div style="padding:1rem;display:flex;flex-direction:column;gap:.75rem;">
       ${list.length === 0
         ? `<div style="text-align:center;padding:4rem 1rem;color:#94a3b8;">
             <div style="font-size:3rem;">📋</div>
             <p style="font-weight:600;margin:.5rem 0 0;">Nenhum requisito</p>
            </div>`
         : list.map(req => reqCard(req, subByReq[req.id], tc)).join('')}
+    </div>
+
+    <!-- RANKING GERAL (anônimo, por unidade) -->
+    <div style="padding:0 1rem 5rem;">
+      <div class="card" style="padding:1rem;">
+        <div style="font-weight:800;color:#1e293b;font-size:.9rem;margin-bottom:.75rem;">🏆 Ranking Geral das Unidades</div>
+        ${renderAnonRanking(computeUnitScores(S.allSubmissions, S.units))}
+      </div>
     </div>
   </div>`;
 }
@@ -402,6 +415,8 @@ window.W = {
     if (_unsubReqs) _unsubReqs();
     if (_unsubSubs) _unsubSubs();
     if (_unsubRegions) _unsubRegions();
+    if (_unsubAllSubs) _unsubAllSubs();
+    if (_unsubUnits) _unsubUnits();
     authLogout();
   },
 

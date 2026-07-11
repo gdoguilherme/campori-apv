@@ -2,7 +2,8 @@ import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatc
 import {
   subUnitById, subParticipantsByUnit, subRegions, setRegionCache, subReqs, subSubsByUnit,
   rname, toast, showBanner, updatePassword, addSubmission, uploadFile, updateSubmissionProof, reqFilledBy,
-  subUnits, subSubs, computeUnitScores, renderAnonRanking, verifyQrPayload, redeemQrSubmission
+  subUnits, subSubs, computeUnitScores, renderAnonRanking, verifyQrPayload, redeemQrSubmission,
+  subDisciplinaryActions
 } from './api.js';
 
 // ── CONFIGURAÇÃO POR MODALIDADE (herdada da região da unidade) ──
@@ -20,6 +21,7 @@ const S = {
   submissions: [],
   allSubmissions: [], // todas as submissions do sistema — só pro ranking geral anônimo
   units: [],
+  disciplinaryActions: [],
   selectedReq: null,
   photoFile: null,
   photoUrl: null,
@@ -28,7 +30,7 @@ const S = {
 };
 
 let _unsubUnit = null, _unsubParticipants = null, _unsubRegions = null, _unsubReqs = null, _unsubSubs = null,
-    _unsubAllUnits = null, _unsubAllSubs = null;
+    _unsubAllUnits = null, _unsubAllSubs = null, _unsubDiscipline = null;
 
 // ── INIT ──────────────────────────────────────────────────────
 export function init() {
@@ -41,6 +43,7 @@ export function init() {
   _unsubReqs     = subReqs(reqs => { S.requirements = reqs; render(); });
   _unsubAllUnits = subUnits(units => { S.units = units; render(); });
   _unsubAllSubs  = subSubs(null, subs => { S.allSubmissions = subs; render(); });
+  _unsubDiscipline = subDisciplinaryActions(actions => { S.disciplinaryActions = actions; render(); });
 
   if (user.unitId) {
     _unsubUnit         = subUnitById(user.unitId, unit => { S.unit = unit; render(); });
@@ -190,7 +193,7 @@ function vPortal() {
     <div style="padding:0 1rem 5rem;">
       <div class="card" style="padding:1rem;">
         <div style="font-weight:800;color:#1e293b;font-size:.9rem;margin-bottom:.75rem;">🏆 Ranking Geral das Unidades</div>
-        ${renderAnonRanking(computeUnitScores(S.allSubmissions, S.units))}
+        ${renderAnonRanking(computeUnitScores(S.allSubmissions, S.units, S.disciplinaryActions))}
       </div>
     </div>
   </div>`;
@@ -433,6 +436,7 @@ window.W = {
     if (_unsubSubs)         _unsubSubs();
     if (_unsubAllUnits)     _unsubAllUnits();
     if (_unsubAllSubs)      _unsubAllSubs();
+    if (_unsubDiscipline)   _unsubDiscipline();
     authLogout();
   },
 

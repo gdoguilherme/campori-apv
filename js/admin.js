@@ -9,6 +9,7 @@ import {
   createParticipant, updateParticipant, deleteParticipant as apiDeleteParticipant, createParticipantsBulk,
   createUnit, updateUnit, deleteUnit as apiDeleteUnit, allocateParticipant,
   computeUnitScores, computeStars, generateQrPayload,
+  subDisciplinaryActions, createDisciplinaryAction, deleteDisciplinaryAction as apiDeleteDiscipline,
   CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS, AREAS_ATUACAO, FILLED_BY
 } from './api.js';
 
@@ -17,10 +18,11 @@ const S = {
   user: null,
   adminTab: 'queue',
   sidebarOpen: false,
-  requirements: [], submissions: [], users: [], regions: [], participants: [], units: [],
+  requirements: [], submissions: [], users: [], regions: [], participants: [], units: [], disciplinaryActions: [],
   filterStatus: 'Todos',
   participantFilterRegion: 'Todas', participantFilterCat: 'Todos',
   unitFilterRegion: 'Todas', unitParticipantSearch: '', counselorUnitId: null,
+  disciplineTargetType: 'region', disciplineTargetId: '',
   editingReq: null, editingUser: null, editingRegion: null, editingParticipant: null, editingUnit: null,
   formRole: null, generatedPwd: '', createdCreds: null,
   importRows: [], importErrors: [],
@@ -29,7 +31,7 @@ const S = {
   loading: false,
 };
 
-let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null, _unsubParticipants = null, _unsubUnits = null;
+let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null, _unsubParticipants = null, _unsubUnits = null, _unsubDiscipline = null;
 
 // ── INIT ──────────────────────────────────────────────────────
 export function init() {
@@ -47,6 +49,7 @@ export function init() {
   });
   _unsubParticipants = subParticipants(ps => { S.participants = ps; render(); });
   _unsubUnits        = subUnits(units => { S.units = units; render(); });
+  _unsubDiscipline   = subDisciplinaryActions(actions => { S.disciplinaryActions = actions; render(); });
 
   refreshUsers();
   render();
@@ -86,7 +89,7 @@ function exportExcel() {
     'Observações': s.notes || ''
   }));
   window.XLSX.utils.book_append_sheet(wb, window.XLSX.utils.json_to_sheet(rows), 'Comprovações');
-  const sc = computeUnitScores(S.submissions, S.units);
+  const sc = computeUnitScores(S.submissions, S.units, S.disciplinaryActions);
   window.XLSX.utils.book_append_sheet(wb, window.XLSX.utils.json_to_sheet(
     sc.map((s, i) => ({ 'Posição': i + 1, 'Unidade': s.name, 'Região': rname(s.regionId), 'Pontos Totais': s.total, 'Aprovações': s.count }))
   ), 'Ranking');
@@ -124,6 +127,7 @@ function render() {
   else if (S.modal === 'unit-participants')  html += mUnitParticipants();
   else if (S.modal === 'counselor-form')     html += mCounselorForm();
   else if (S.modal === 'qr-code')            html += mQrCode();
+  else if (S.modal === 'discipline-form')    html += mDisciplineForm();
   else if (S.modal === 'credentials')    html += mCredentialsModal();
   else if (S.modal === 'photo')          html += mPhoto();
   else if (S.modal === 'change-password') html += mChangePassword();
@@ -142,6 +146,7 @@ function vAdmin() {
       { id: 'ranking',      label: '🏆 Ranking'   },
       { id: 'participants', label: '👥 Participantes' },
       { id: 'units',        label: '🏕️ Unidades' },
+      { id: 'discipline',   label: '⚠️ Disciplina' },
     ] : []),
     ...(isSuperAdmin() ? [
       { id: 'regions', label: '🗺️ Regiões' },
@@ -190,6 +195,7 @@ function vAdmin() {
         ${S.adminTab === 'ranking'      && isAdmin()       ? tRanking()  : ''}
         ${S.adminTab === 'participants' && isAdmin()       ? tParticipants() : ''}
         ${S.adminTab === 'units'        && isAdmin()       ? tUnits()    : ''}
+        ${S.adminTab === 'discipline'   && isAdmin()       ? tDiscipline() : ''}
         ${S.adminTab === 'regions'      && isSuperAdmin()  ? tRegions()  : ''}
         ${S.adminTab === 'users'        && isSuperAdmin()  ? tUsers()    : ''}
       </div>
@@ -368,7 +374,7 @@ function tHistory() {
 
 // ── TAB: DASHBOARD ────────────────────────────────────────────
 function tDashboard() {
-  const scores   = computeUnitScores(S.submissions, S.units);
+  const scores   = computeUnitScores(S.submissions, S.units, S.disciplinaryActions);
   const total    = S.submissions.length;
   const approved = S.submissions.filter(s => s.status === 'approved').length;
   const pending  = S.submissions.filter(s => s.status === 'pending').length;
@@ -462,7 +468,7 @@ function tDashboard() {
 // ── TAB: RANKING ──────────────────────────────────────────────
 // Ranking único por unidade — sem separação DBV/AVT, já que as unidades são mistas.
 function tRanking() {
-  const scores = computeUnitScores(S.submissions, S.units);
+  const scores = computeUnitScores(S.submissions, S.units, S.disciplinaryActions);
   const max    = scores[0]?.total || 1;
   const top3   = scores.filter(s => s.total > 0).slice(0, 3);
 
@@ -755,6 +761,41 @@ function tUnits() {
             </div>
           </div>`;
         }).join('')}
+      </div>`}
+  </div>`;
+}
+
+// ── TAB: DISCIPLINA ───────────────────────────────────────────
+function tDiscipline() {
+  const sorted = [...S.disciplinaryActions].sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  return `
+  <div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
+      <span style="font-weight:800;color:#1e293b;">Disciplina (${sorted.length})</span>
+      <button onclick="W.openDisciplineForm()"
+        style="background:#dc2626;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Registrar Infração</button>
+    </div>
+    ${sorted.length === 0
+      ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">⚠️</div><p style="font-weight:600;">Nenhuma infração registrada</p></div>`
+      : `<div style="display:flex;flex-direction:column;gap:.625rem;">
+        ${sorted.map(d => `
+        <div class="card" style="padding:1rem;overflow:visible;">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;">
+            <div style="flex:1;">
+              <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
+                <span style="background:${d.targetType === 'region' ? '#dbeafe' : '#fef3c7'};color:${d.targetType === 'region' ? '#1d4ed8' : '#92400e'};font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">
+                  ${d.targetType === 'region' ? '🗺️ Região inteira' : '🏕️ Unidade'}
+                </span>
+                <span style="background:#fee2e2;color:#991b1b;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">-${d.points || 5} pts</span>
+              </div>
+              <div style="font-weight:700;color:#1e293b;">${d.targetName || d.targetId}</div>
+              <div style="font-size:.8rem;color:#64748b;margin-top:.15rem;">${d.reason}</div>
+              <div style="font-size:.72rem;color:#94a3b8;margin-top:.2rem;">${fmtDate(d.createdAt)} · ${d.createdByName || d.createdBy}</div>
+            </div>
+            ${isSuperAdmin() ? `<button onclick="W.deleteDiscipline('${d.id}')"
+              style="background:#fef2f2;border:none;color:#dc2626;padding:.5rem;border-radius:.625rem;cursor:pointer;flex-shrink:0;">🗑️</button>` : ''}
+          </div>
+        </div>`).join('')}
       </div>`}
   </div>`;
 }
@@ -1197,6 +1238,54 @@ function mQrCode() {
   </div>`;
 }
 
+// ── MODAL: REGISTRAR INFRAÇÃO ────────────────────────────────────
+function mDisciplineForm() {
+  const type = S.disciplineTargetType;
+  const sortedRegions = [...S.regions].sort((a, b) => a.name.localeCompare(b.name));
+  const sortedUnits   = [...S.units].sort((a, b) => a.name.localeCompare(b.name));
+  const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
+
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:420px;">
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">⚠️ Registrar Infração</h2>
+      <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>${lbl('Alvo')}
+          <div style="display:flex;gap:.5rem;">
+            <button onclick="W.setDisciplineTargetType('region')"
+              style="flex:1;padding:.625rem;border-radius:.75rem;border:1.5px solid ${type === 'region' ? '#0D2B6E' : '#e2e8f0'};
+              background:${type === 'region' ? '#eff6ff' : '#fff'};color:${type === 'region' ? '#0D2B6E' : '#64748b'};
+              font-weight:700;font-size:.85rem;cursor:pointer;">🗺️ Região inteira</button>
+            <button onclick="W.setDisciplineTargetType('unit')"
+              style="flex:1;padding:.625rem;border-radius:.75rem;border:1.5px solid ${type === 'unit' ? '#0D2B6E' : '#e2e8f0'};
+              background:${type === 'unit' ? '#eff6ff' : '#fff'};color:${type === 'unit' ? '#0D2B6E' : '#64748b'};
+              font-weight:700;font-size:.85rem;cursor:pointer;">🏕️ Unidade específica</button>
+          </div>
+        </div>
+        <div>${lbl(type === 'region' ? 'Região *' : 'Unidade *')}
+          <select id="disc-target" style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
+            <option value="" disabled selected>Selecione...</option>
+            ${type === 'region'
+              ? sortedRegions.map(r => `<option value="${r.id}">${r.name}</option>`).join('')
+              : sortedUnits.map(u => `<option value="${u.id}">${u.name} (${rname(u.regionId)})</option>`).join('')}
+          </select>
+        </div>
+        <div>${lbl('Motivo *')}<textarea id="disc-reason" rows="3" placeholder="Descreva a infração..."
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;resize:none;outline:none;font-family:inherit;"></textarea></div>
+        <div style="background:#fef2f2;border-radius:.875rem;padding:.75rem 1rem;font-size:.85rem;color:#991b1b;font-weight:700;">
+          Desconto automático: -5 pts
+        </div>
+        <button onclick="W.saveDiscipline()" ${S.loading ? 'disabled' : ''}
+          style="width:100%;background:#dc2626;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          ${S.loading ? '⏳ Salvando...' : '⚠️ Registrar Infração'}
+        </button>
+      </div>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
 // ── MODAL: CREDENCIAIS GERADAS (região ou usuário) ─────────────
 function mCredentialsModal() {
   const { title, username, password } = S.createdCreds || {};
@@ -1268,6 +1357,7 @@ window.W = {
     if (_unsubRegions)      _unsubRegions();
     if (_unsubParticipants) _unsubParticipants();
     if (_unsubUnits)        _unsubUnits();
+    if (_unsubDiscipline)   _unsubDiscipline();
     authLogout();
   },
 
@@ -1648,6 +1738,33 @@ window.W = {
       S.qrError = e.message || 'Erro ao gerar QR Code.';
       render();
     }
+  },
+
+  // ── Disciplina ─────────────────────────────────────────────
+  openDisciplineForm() {
+    S.disciplineTargetType = 'region';
+    S.modal = 'discipline-form'; render();
+  },
+  setDisciplineTargetType(t) { S.disciplineTargetType = t; render(); },
+  async saveDiscipline() {
+    const targetId = document.getElementById('disc-target')?.value;
+    const reason   = document.getElementById('disc-reason')?.value?.trim();
+    if (!targetId || !reason) { toast('Selecione o alvo e descreva o motivo', 'error'); return; }
+    const type = S.disciplineTargetType;
+    const targetName = type === 'region'
+      ? S.regions.find(r => r.id === targetId)?.name
+      : S.units.find(u => u.id === targetId)?.name;
+    S.loading = true; render();
+    try {
+      await createDisciplinaryAction({ targetType: type, targetId, targetName, reason }, S.user);
+      toast('⚠️ Infração registrada.', 'info');
+      S.modal = null;
+    } catch (e) { toast(e.message || 'Erro ao registrar.', 'error'); }
+    S.loading = false; render();
+  },
+  deleteDiscipline(id) {
+    if (!confirm('Excluir este registro de disciplina? O desconto de pontos será removido.')) return;
+    apiDeleteDiscipline(id).then(() => toast('Registro excluído.', 'info'));
   },
 
   // ── Senha ──────────────────────────────────────────────────

@@ -3,6 +3,7 @@ import {
   subReqs, subSubs, subRegions, setRegionCache, rname, fmtDate, toast, showBanner,
   addSubmission, uploadFile, updateSubmissionProof, updatePassword, reqFilledBy,
   subUnits, computeUnitScores, renderAnonRanking, subParticipants, updateRegionProfile,
+  subDisciplinaryActions,
   CATEGORIES
 } from './api.js';
 
@@ -36,6 +37,7 @@ const S = {
   units: [],
   regions: [],
   allParticipants: [],
+  disciplinaryActions: [],
   filterCat: 'Todos',
   selectedReq: null,
   photoFile: null,
@@ -46,7 +48,7 @@ const S = {
 };
 
 let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null, _unsubAllSubs = null,
-    _unsubUnits = null, _unsubParticipants = null;
+    _unsubUnits = null, _unsubParticipants = null, _unsubDiscipline = null;
 
 // ── INIT ──────────────────────────────────────────────────────
 export function init(theme) {
@@ -71,6 +73,7 @@ export function init(theme) {
   _unsubAllSubs     = subSubs(null, subs => { S.allSubmissions = subs; render(); });
   _unsubUnits       = subUnits(units => { S.units = units; render(); });
   _unsubParticipants = subParticipants(ps => { S.allParticipants = ps; render(); });
+  _unsubDiscipline   = subDisciplinaryActions(actions => { S.disciplinaryActions = actions; render(); });
 
   render();
 }
@@ -265,7 +268,7 @@ function vPortal() {
     <div style="padding:0 1rem 5rem;">
       <div class="card" style="padding:1rem;">
         <div style="font-weight:800;color:#1e293b;font-size:.9rem;margin-bottom:.75rem;">🏆 Ranking Geral das Unidades</div>
-        ${renderAnonRanking(computeUnitScores(S.allSubmissions, S.units))}
+        ${renderAnonRanking(computeUnitScores(S.allSubmissions, S.units, S.disciplinaryActions))}
       </div>
     </div>
   </div>`;
@@ -528,6 +531,7 @@ window.W = {
     if (_unsubAllSubs) _unsubAllSubs();
     if (_unsubUnits) _unsubUnits();
     if (_unsubParticipants) _unsubParticipants();
+    if (_unsubDiscipline) _unsubDiscipline();
     authLogout();
   },
 

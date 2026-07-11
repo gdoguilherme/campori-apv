@@ -489,7 +489,7 @@ export async function uploadFile(file, regionId, reqCode) {
 // - submission com unitId (enviada pelo Conselheiro, ou avaliada pelo Fiscal
 //   no nível da unidade) → pontua só aquela unidade
 // Unidades são mistas (sem separação DBV/AVT) — não há catFilter aqui.
-export function computeUnitScores(submissions, units) {
+export function computeUnitScores(submissions, units, disciplinaryActions = []) {
   const scores = {};
   units.forEach(u => { scores[u.id] = { name: u.name, regionId: u.regionId, total: 0, count: 0 }; });
 
@@ -517,6 +517,20 @@ export function computeUnitScores(submissions, units) {
         });
       }
     });
+
+  // Disciplina: desconta pontos da unidade específica, ou de todas as unidades
+  // da região (não altera "count" de aprovações — é só uma penalidade de pontos)
+  disciplinaryActions.forEach(d => {
+    const pts = d.points || 5;
+    if (d.targetType === 'unit') {
+      if (scores[d.targetId]) scores[d.targetId].total -= pts;
+    } else if (d.targetType === 'region') {
+      units.filter(u => u.regionId === d.targetId).forEach(u => {
+        if (scores[u.id]) scores[u.id].total -= pts;
+      });
+    }
+  });
+  Object.values(scores).forEach(s => { s.total = Math.max(0, s.total); });
 
   return Object.entries(scores).map(([id, v]) => ({ id, ...v })).sort((a, b) => b.total - a.total);
 }
@@ -557,11 +571,36 @@ export function renderAnonRanking(scores, limit = 10) {
 // mantém sessão nem precisa de atualização ao vivo — regions/submissions/units
 // já são coleções abertas no Firestore (ver firestore.rules)
 export async function fetchPublicRanking() {
-  const [subsSnap, unitsSnap] = await Promise.all([
+  const [subsSnap, unitsSnap, disciplineSnap] = await Promise.all([
     getDocs(collection(db, 'submissions')),
-    getDocs(collection(db, 'units'))
+    getDocs(collection(db, 'units')),
+    getDocs(collection(db, 'disciplinaryActions'))
   ]);
   const submissions = subsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
   const units = unitsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-  return computeUnitScores(submissions, units);
+  const disciplinaryActions = disciplineSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return computeUnitScores(submissions, units, disciplinaryActions);
+}
+
+// ── DISCIPLINA ──────────────────────────────────────────────────
+// target: 'region' (desconta a região inteira + todas as suas unidades)
+// ou 'unit' (desconta só aquela unidade, sem afetar a região nem as demais)
+
+export function subDisciplinaryActions(onUpdate) {
+  return onSnapshot(collection(db, 'disciplinaryActions'),
+    snap => onUpdate(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+    err => toast('Erro ao carregar disciplina: ' + err.message, 'error')
+  );
+}
+
+export async function createDisciplinaryAction(data, currentUser) {
+  await addDoc(collection(db, 'disciplinaryActions'), {
+    targetType: data.targetType, targetId: data.targetId, targetName: data.targetName,
+    reason: data.reason, points: 5,
+    createdAt: serverTimestamp(), createdBy: currentUser?.username || 'admin', createdByName: currentUser?.name || 'Administrador'
+  });
+}
+
+export async function deleteDisciplinaryAction(id) {
+  await deleteDoc(doc(db, 'disciplinaryActions', id));
 }

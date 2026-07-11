@@ -2,7 +2,7 @@ import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatc
 import {
   subUnitById, subParticipantsByUnit, subRegions, setRegionCache, subReqs, subSubsByUnit,
   rname, toast, showBanner, updatePassword, addSubmission, uploadFile, updateSubmissionProof, reqFilledBy,
-  subUnits, subSubs, computeUnitScores, renderAnonRanking
+  subUnits, subSubs, computeUnitScores, renderAnonRanking, verifyQrPayload, redeemQrSubmission
 } from './api.js';
 
 // ── CONFIGURAÇÃO POR MODALIDADE (herdada da região da unidade) ──
@@ -74,6 +74,7 @@ function render() {
   if (S.modal === 'submit')          html += mSubmit();
   else if (S.modal === 'photo')      html += mPhoto();
   else if (S.modal === 'change-password') html += mChangePassword();
+  else if (S.modal === 'qr-scanner') html += mQrScanner();
   el.innerHTML = html;
 }
 
@@ -152,7 +153,11 @@ function vPortal() {
     </div>
 
     <div style="padding:1rem;display:flex;flex-direction:column;gap:.75rem;">
-      <div style="font-weight:800;color:#1e293b;">Requisitos da Unidade</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-weight:800;color:#1e293b;">Requisitos da Unidade</div>
+        <button onclick="W.openQrScanner()"
+          style="background:${tc.primary};color:#fff;border:none;padding:.5rem .875rem;border-radius:.75rem;font-size:.8rem;font-weight:700;cursor:pointer;">📷 Escanear QR</button>
+      </div>
       ${visibleReqs.length === 0
         ? `<div style="text-align:center;padding:2.5rem 1rem;color:#94a3b8;">
             <div style="font-size:2.5rem;">📋</div>
@@ -318,6 +323,68 @@ function mPhoto() {
   </div>`;
 }
 
+// ── MODAL: ESCANEAR QR CODE ─────────────────────────────────────
+function mQrScanner() {
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeQrScanner()">
+    <div class="modal-content" style="max-width:420px;">
+      <h2 style="font-size:1.1rem;font-weight:800;color:#1e293b;margin:0 0 .75rem;">📷 Escanear QR Code</h2>
+      <p style="font-size:.82rem;color:#64748b;margin:0 0 .75rem;">Aponte a câmera para o QR Code impresso da prova física.</p>
+      <div id="qr-reader" style="width:100%;border-radius:1rem;overflow:hidden;background:#000;"></div>
+      <button onclick="W.closeQrScanner()"
+        style="width:100%;margin-top:1rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ── QR SCANNER (html5-qrcode) ───────────────────────────────────
+let _qrScanner = null;
+
+function startQrScanner() {
+  if (typeof window.Html5Qrcode === 'undefined') { toast('Biblioteca de QR Code não carregada', 'error'); return; }
+  _qrScanner = new window.Html5Qrcode('qr-reader');
+  _qrScanner.start(
+    { facingMode: 'environment' },
+    { fps: 10, qrbox: 240 },
+    onQrScanSuccess,
+    () => {} // ignora falhas de decodificação quadro a quadro
+  ).catch(err => {
+    toast('Não foi possível acessar a câmera: ' + err, 'error');
+  });
+}
+
+function stopQrScanner() {
+  if (_qrScanner) {
+    const s = _qrScanner;
+    _qrScanner = null;
+    s.stop().then(() => s.clear()).catch(() => {});
+  }
+}
+
+async function onQrScanSuccess(decodedText) {
+  stopQrScanner();
+  S.modal = null; render();
+  try {
+    const payload = JSON.parse(decodedText);
+    const { requisitoId, pontos, hash } = payload || {};
+    if (!requisitoId || pontos === undefined || !hash) throw new Error('QR Code inválido');
+
+    await verifyQrPayload({ requisitoId, pontos, hash }, getToken());
+
+    const req = S.requirements.find(r => r.id === requisitoId);
+    if (!req) throw new Error('Requisito não encontrado');
+    if (reqFilledBy(req) !== 'conselheiro') throw new Error('Este requisito não é do tipo Conselheiro');
+
+    const already = S.submissions.find(s => s.requirementId === requisitoId && s.status === 'approved');
+    if (already) { toast('Este requisito já foi registrado nesta unidade.', 'info'); return; }
+
+    await redeemQrSubmission(S.user, req);
+    showBanner(`✅ ${req.name} — ${pontos} pts registrados na unidade!`);
+  } catch (e) {
+    toast(e.message || 'Erro ao processar QR Code', 'error');
+  }
+}
+
 // ── MODAL: TROCAR SENHA ───────────────────────────────────────
 function mChangePassword() {
   const tc = THEMES[theme()];
@@ -372,6 +439,17 @@ window.W = {
   closeModal()    { S.modal = null; render(); },
   openChangePwd() { S.modal = 'change-password'; render(); },
   openPhoto(url)  { S.photoUrl = url; S.modal = 'photo'; render(); },
+
+  openQrScanner() {
+    S.modal = 'qr-scanner';
+    render();
+    setTimeout(startQrScanner, 50); // espera o #qr-reader existir no DOM
+  },
+  closeQrScanner() {
+    stopQrScanner();
+    S.modal = null;
+    render();
+  },
 
   openSubmit(reqId) {
     S.selectedReq = reqId;

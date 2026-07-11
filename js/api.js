@@ -368,6 +368,39 @@ export async function updateRegionProfile(regionId, data) {
   await updateDoc(doc(db, 'regions', regionId), data);
 }
 
+// ── QR CODE (provas físicas) ───────────────────────────────────
+// O hash é gerado e validado no backend (server/routes/qr.js) — nunca no
+// client, pra um QR impresso não poder ser forjado.
+
+export async function generateQrPayload(requirementId, points, token) {
+  return apiFetch('/qr/generate', { method: 'POST', token, body: { requirementId, points } });
+}
+
+export async function verifyQrPayload(payload, token) {
+  return apiFetch('/qr/verify', { method: 'POST', token, body: payload });
+}
+
+// Registra a pontuação de um QR já validado — aprovado automaticamente
+// (a verificação presencial já aconteceu na hora da prova física)
+export async function redeemQrSubmission(user, req) {
+  const ref = await addDoc(collection(db, 'submissions'), {
+    regionId: user.regionId || null,
+    regionName: user.regionId ? rname(user.regionId) : null,
+    unitId: user.unitId || null,
+    requirementId: req.id, requirementName: req.name,
+    requirementPoints: req.points, requirementCategory: req.category,
+    competitionCategory: req.competitionCategory || 'Ambos',
+    notes: 'Registrado via QR Code', proofUrl: null,
+    status: 'approved',
+    source: 'qr', fiscalSuggestion: false,
+    submittedAt: serverTimestamp(),
+    submittedBy: user.username, submittedByName: user.name,
+    reviewedAt: serverTimestamp(), reviewedBy: 'qr', reviewedByName: 'QR Code',
+    requirementDeadlineSnapshot: req.deadline || null
+  });
+  return ref.id;
+}
+
 // ── PARTICIPANTS ──────────────────────────────────────────────
 
 export async function createParticipant(data) {

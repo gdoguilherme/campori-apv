@@ -8,7 +8,7 @@ import {
   createRegion as apiCreateRegion, updateRegion as apiUpdateRegion, delRegion as apiDelRegion,
   createParticipant, updateParticipant, deleteParticipant as apiDeleteParticipant, createParticipantsBulk,
   createUnit, updateUnit, deleteUnit as apiDeleteUnit, allocateParticipant,
-  computeUnitScores, computeStars,
+  computeUnitScores, computeStars, generateQrPayload,
   CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS, AREAS_ATUACAO, FILLED_BY
 } from './api.js';
 
@@ -24,6 +24,7 @@ const S = {
   editingReq: null, editingUser: null, editingRegion: null, editingParticipant: null, editingUnit: null,
   formRole: null, generatedPwd: '', createdCreds: null,
   importRows: [], importErrors: [],
+  qrReq: null, qrLoading: false, qrError: null,
   photoUrl: null, modal: null,
   loading: false,
 };
@@ -122,6 +123,7 @@ function render() {
   else if (S.modal === 'unit-form')          html += mUnitForm();
   else if (S.modal === 'unit-participants')  html += mUnitParticipants();
   else if (S.modal === 'counselor-form')     html += mCounselorForm();
+  else if (S.modal === 'qr-code')            html += mQrCode();
   else if (S.modal === 'credentials')    html += mCredentialsModal();
   else if (S.modal === 'photo')          html += mPhoto();
   else if (S.modal === 'change-password') html += mChangePassword();
@@ -274,6 +276,8 @@ function tReqs() {
             ${req.description ? `<div style="font-size:.78rem;color:#64748b;margin-top:.15rem;">${req.description}</div>` : ''}
           </div>
           <div style="display:flex;gap:.375rem;flex-shrink:0;">
+            ${type === 'conselheiro' ? `<button onclick="W.openQrCode('${req.id}')"
+              style="background:#f0fdf4;border:none;color:#166534;padding:.5rem;border-radius:.625rem;cursor:pointer;">🔲</button>` : ''}
             <button onclick="W.openReqForm('${req.id}')"
               style="background:#eff6ff;border:none;color:#1d4ed8;padding:.5rem;border-radius:.625rem;cursor:pointer;">✏️</button>
             <button onclick="W.delReq('${req.id}')"
@@ -1168,6 +1172,31 @@ function mCounselorForm() {
   </div>`;
 }
 
+// ── MODAL: QR CODE DO REQUISITO ─────────────────────────────────
+function mQrCode() {
+  const req = S.qrReq;
+  if (!req) return '';
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:380px;text-align:center;">
+      <h2 style="font-size:1.1rem;font-weight:800;color:#1e293b;margin:0 0 .25rem;">🔲 QR Code</h2>
+      <p style="font-size:.85rem;color:#64748b;margin:0 0 1rem;">${req.name} · <strong>${req.points} pts</strong></p>
+      <div style="display:flex;align-items:center;justify-content:center;min-height:280px;">
+        ${S.qrLoading ? `<div class="spinner"></div>` : ''}
+        ${S.qrError ? `<p style="color:#dc2626;font-size:.85rem;">${S.qrError}</p>` : ''}
+        <div id="qr-code-container" style="${S.qrLoading || S.qrError ? 'display:none;' : ''}"></div>
+      </div>
+      <p style="font-size:.75rem;color:#94a3b8;margin:1rem 0;">Imprima e leve para a prova física. O Conselheiro escaneia no portal dele para registrar os pontos da unidade.</p>
+      <button onclick="window.print()" ${S.qrLoading || S.qrError ? 'disabled' : ''}
+        style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1rem;border-radius:1rem;font-weight:800;cursor:pointer;margin-bottom:.625rem;opacity:${S.qrLoading || S.qrError ? .6 : 1};">
+        🖨️ Imprimir
+      </button>
+      <button onclick="W.closeModal()"
+        style="width:100%;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Fechar</button>
+    </div>
+  </div>`;
+}
+
 // ── MODAL: CREDENCIAIS GERADAS (região ou usuário) ─────────────
 function mCredentialsModal() {
   const { title, username, password } = S.createdCreds || {};
@@ -1597,6 +1626,28 @@ window.W = {
       await refreshUsers();
     } catch (e) { toast(e.message || 'Erro ao vincular.', 'error'); }
     S.loading = false; render();
+  },
+
+  async openQrCode(reqId) {
+    const req = S.requirements.find(r => r.id === reqId);
+    if (!req) return;
+    S.qrReq = req; S.qrError = null; S.qrLoading = true;
+    S.modal = 'qr-code'; render();
+    try {
+      if (typeof window.QRCode === 'undefined') throw new Error('Biblioteca de QR Code não carregada');
+      const { requisitoId, pontos, hash } = await generateQrPayload(req.id, req.points, getToken());
+      const payload = JSON.stringify({ requisitoId, pontos, hash });
+      S.qrLoading = false; render();
+      // renderiza no #qr-code-container após o modal existir no DOM
+      setTimeout(() => {
+        const el = document.getElementById('qr-code-container');
+        if (el) new window.QRCode(el, { text: payload, width: 260, height: 260 });
+      }, 30);
+    } catch (e) {
+      S.qrLoading = false;
+      S.qrError = e.message || 'Erro ao gerar QR Code.';
+      render();
+    }
   },
 
   // ── Senha ──────────────────────────────────────────────────

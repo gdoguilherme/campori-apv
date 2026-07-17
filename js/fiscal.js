@@ -2,7 +2,7 @@ import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatc
 import {
   subReqs, subSubs, subRegions, setRegionCache, subUnits,
   rname, fmtDate, toast, reqFilledBy,
-  doFiscalSuggestion, updatePassword, SCORE_PCTS
+  doFiscalSuggestion, updatePassword, SCORE_PCTS, generateQrPayload
 } from './api.js';
 
 // ── ESTADO ────────────────────────────────────────────────────
@@ -16,7 +16,8 @@ const S = {
   fiscalRegionId: null,
   fiscalUnitId: null,
   fiscalScores: {},   // { reqId: { siId: pct } }
-  modal: null,        // 'change-password'
+  qrReq: null, qrVariant: null, qrLoading: false, qrError: null,
+  modal: null,        // 'change-password' | 'qr-list' | 'qr-code'
   loading: false,
 };
 
@@ -55,6 +56,8 @@ function render() {
   if (!el) return;
   let html = S.fiscalScopeType ? vScore() : vSelectRegion();
   if (S.modal === 'change-password') html += mChangePassword();
+  else if (S.modal === 'qr-list')    html += mQrList();
+  else if (S.modal === 'qr-code')    html += mQrCode();
   el.innerHTML = html;
 }
 
@@ -78,6 +81,9 @@ function vSelectRegion() {
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;">
         <span style="font-size:.82rem;color:#cfe8ca;">👤 ${S.user.name}</span>
         <div style="display:flex;gap:.5rem;align-items:center;">
+          <button onclick="W.openQrList()"
+            style="background:rgba(0,0,0,.2);border:none;color:#cfe8ca;
+            padding:.375rem .75rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔲 QR Codes</button>
           <button onclick="W.openChangePwd()"
             style="background:rgba(0,0,0,.2);border:none;color:#cfe8ca;
             padding:.375rem .75rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔑</button>
@@ -314,6 +320,61 @@ function scoreCard(req, existing) {
   </div>`;
 }
 
+// ── MODAL: LISTA DE PROVAS COM QR CODE ─────────────────────────
+function mQrList() {
+  const provas = S.requirements.filter(r => r.active !== false && (r.qrVariants || []).length > 0);
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content">
+      <div style="width:2.5rem;height:.25rem;background:#e2e8f0;border-radius:999px;margin:0 auto .875rem;"></div>
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 .25rem;">🔲 QR Codes das Provas</h2>
+      <p style="font-size:.82rem;color:#64748b;margin:0 0 1rem;">Só o Fiscal de Prova vê os QR Codes. Mostre a tela ou imprima pra unidade escanear.</p>
+      ${provas.length === 0
+        ? `<p style="text-align:center;color:#94a3b8;padding:2rem 0;">Nenhuma prova com QR Code cadastrada ainda.</p>`
+        : provas.map(req => `
+        <div class="card" style="padding:1rem;margin-bottom:.625rem;">
+          <div style="font-weight:700;color:#1e293b;font-size:.9rem;margin-bottom:.5rem;">${req.name}</div>
+          <div style="display:flex;flex-direction:column;gap:.375rem;">
+            ${req.qrVariants.map(v => `
+            <button onclick="W.openQrCode('${req.id}','${v.id}')"
+              style="display:flex;justify-content:space-between;align-items:center;padding:.625rem .75rem;
+              background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:.75rem;cursor:pointer;text-align:left;">
+              <span style="font-weight:600;color:#374151;font-size:.85rem;">${v.label}</span>
+              <span style="font-weight:700;color:#2D6A2A;font-size:.85rem;">${v.points} pts →</span>
+            </button>`).join('')}
+          </div>
+        </div>`).join('')}
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.5rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Fechar</button>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: QR CODE DE UMA VARIANTE ─────────────────────────────
+function mQrCode() {
+  const req = S.qrReq, variant = S.qrVariant;
+  if (!req || !variant) return '';
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:380px;text-align:center;">
+      <h2 style="font-size:1.1rem;font-weight:800;color:#1e293b;margin:0 0 .25rem;">🔲 ${variant.label}</h2>
+      <p style="font-size:.85rem;color:#64748b;margin:0 0 1rem;">${req.name} · <strong>${variant.points} pts</strong></p>
+      <div style="display:flex;align-items:center;justify-content:center;min-height:280px;">
+        ${S.qrLoading ? `<div class="spinner"></div>` : ''}
+        ${S.qrError ? `<p style="color:#dc2626;font-size:.85rem;">${S.qrError}</p>` : ''}
+        <div id="qr-code-container" style="${S.qrLoading || S.qrError ? 'display:none;' : ''}"></div>
+      </div>
+      <p style="font-size:.75rem;color:#94a3b8;margin:1rem 0;">Mostre esta tela ou imprima. O Conselheiro escaneia no portal dele, selecionando esta prova antes.</p>
+      <button onclick="window.print()" ${S.qrLoading || S.qrError ? 'disabled' : ''}
+        style="width:100%;background:#2D6A2A;color:#fff;border:none;padding:1rem;border-radius:1rem;font-weight:800;cursor:pointer;margin-bottom:.625rem;opacity:${S.qrLoading || S.qrError ? .6 : 1};">
+        🖨️ Imprimir
+      </button>
+      <button onclick="W.openQrList()"
+        style="width:100%;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">← Voltar</button>
+    </div>
+  </div>`;
+}
+
 // ── MODAL: TROCAR SENHA ───────────────────────────────────────
 function mChangePassword() {
   return `
@@ -363,6 +424,29 @@ window.W = {
 
   closeModal()   { S.modal = null; render(); },
   openChangePwd(){ S.modal = 'change-password'; render(); },
+  openQrList()   { S.modal = 'qr-list'; render(); },
+
+  async openQrCode(reqId, variantId) {
+    const req = S.requirements.find(r => r.id === reqId);
+    const variant = req?.qrVariants?.find(v => v.id === variantId);
+    if (!req || !variant) return;
+    S.qrReq = req; S.qrVariant = variant; S.qrError = null; S.qrLoading = true;
+    S.modal = 'qr-code'; render();
+    try {
+      if (typeof window.QRCode === 'undefined') throw new Error('Biblioteca de QR Code não carregada');
+      const { requisitoId, varianteId, pontos, hash } = await generateQrPayload(req.id, variant.id, variant.points, getToken());
+      const payload = JSON.stringify({ requisitoId, varianteId, pontos, hash });
+      S.qrLoading = false; render();
+      setTimeout(() => {
+        const el = document.getElementById('qr-code-container');
+        if (el) new window.QRCode(el, { text: payload, width: 260, height: 260 });
+      }, 30);
+    } catch (e) {
+      S.qrLoading = false;
+      S.qrError = e.message || 'Erro ao gerar QR Code.';
+      render();
+    }
+  },
 
   // type: 'region' | 'unit' | null (null volta pra tela de seleção)
   selectScope(type, id) {

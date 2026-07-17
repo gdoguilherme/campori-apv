@@ -372,8 +372,10 @@ export async function updateRegionProfile(regionId, data) {
 // O hash é gerado e validado no backend (server/routes/qr.js) — nunca no
 // client, pra um QR impresso não poder ser forjado.
 
-export async function generateQrPayload(requirementId, points, token) {
-  return apiFetch('/qr/generate', { method: 'POST', token, body: { requirementId, points } });
+// requirement pode ter várias variantes de QR (qrVariants: [{id,label,points}]) —
+// cada uma gera um hash próprio, assinado sobre (requirementId, variantId, points)
+export async function generateQrPayload(requirementId, variantId, points, token) {
+  return apiFetch('/qr/generate', { method: 'POST', token, body: { requirementId, variantId, points } });
 }
 
 export async function verifyQrPayload(payload, token) {
@@ -381,16 +383,21 @@ export async function verifyQrPayload(payload, token) {
 }
 
 // Registra a pontuação de um QR já validado — aprovado automaticamente
-// (a verificação presencial já aconteceu na hora da prova física)
-export async function redeemQrSubmission(user, req) {
+// (a verificação presencial já aconteceu na hora da prova física).
+// A trava de duplicidade é por (unitId, requirementId) — feita pelo caller antes
+// de chamar esta função — não pelo id da variante, já que a unidade só pode
+// pontuar UMA variante daquela prova.
+export async function redeemQrSubmission(user, req, variant) {
   const ref = await addDoc(collection(db, 'submissions'), {
     regionId: user.regionId || null,
     regionName: user.regionId ? rname(user.regionId) : null,
     unitId: user.unitId || null,
     requirementId: req.id, requirementName: req.name,
-    requirementPoints: req.points, requirementCategory: req.category,
+    requirementPoints: variant?.points ?? req.points, requirementCategory: req.category,
+    qrVariantId: variant?.id || null, qrVariantLabel: variant?.label || null,
     competitionCategory: req.competitionCategory || 'Ambos',
-    notes: 'Registrado via QR Code', proofUrl: null,
+    notes: variant?.label ? `Registrado via QR Code — variante: ${variant.label}` : 'Registrado via QR Code',
+    proofUrl: null,
     status: 'approved',
     source: 'qr', fiscalSuggestion: false,
     submittedAt: serverTimestamp(),

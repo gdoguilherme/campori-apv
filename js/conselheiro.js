@@ -25,7 +25,8 @@ const S = {
   selectedReq: null,
   photoFile: null,
   photoUrl: null,
-  modal: null,   // 'submit' | 'photo' | 'change-password'
+  qrSelectedReqId: null, // prova selecionada antes de escanear
+  modal: null,   // 'submit' | 'photo' | 'change-password' | 'qr-scanner'
   loading: false,
 };
 
@@ -328,12 +329,26 @@ function mPhoto() {
 
 // ── MODAL: ESCANEAR QR CODE ─────────────────────────────────────
 function mQrScanner() {
+  // Provas disponíveis pra esta unidade: tipo Conselheiro, com pelo menos uma variante de QR
+  const provas = S.requirements.filter(r => r.active !== false && reqFilledBy(r) === 'conselheiro' && (r.qrVariants || []).length > 0);
+  const selected = S.qrSelectedReqId;
+
   return `
   <div class="modal-overlay center" onclick="if(event.target===this)W.closeQrScanner()">
     <div class="modal-content" style="max-width:420px;">
       <h2 style="font-size:1.1rem;font-weight:800;color:#1e293b;margin:0 0 .75rem;">📷 Escanear QR Code</h2>
-      <p style="font-size:.82rem;color:#64748b;margin:0 0 .75rem;">Aponte a câmera para o QR Code impresso da prova física.</p>
-      <div id="qr-reader" style="width:100%;border-radius:1rem;overflow:hidden;background:#000;"></div>
+      <div style="margin-bottom:.875rem;">
+        <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">Qual prova você está aplicando? *</label>
+        <select id="qr-prova-select" onchange="W.selectQrProva(this.value)"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
+          <option value="" disabled ${!selected ? 'selected' : ''}>Selecione a prova...</option>
+          ${provas.map(r => `<option value="${r.id}" ${selected === r.id ? 'selected' : ''}>${r.name}</option>`).join('')}
+        </select>
+      </div>
+      ${selected
+        ? `<div id="qr-reader" style="width:100%;border-radius:1rem;overflow:hidden;background:#000;"></div>
+           <p style="font-size:.78rem;color:#64748b;margin-top:.625rem;">Aponte a câmera para o QR Code mostrado/impresso pelo Fiscal de Prova.</p>`
+        : `<p style="font-size:.82rem;color:#94a3b8;text-align:center;padding:1.5rem 0;">Selecione a prova acima para iniciar a câmera.</p>`}
       <button onclick="W.closeQrScanner()"
         style="width:100%;margin-top:1rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
     </div>
@@ -345,6 +360,8 @@ let _qrScanner = null;
 
 function startQrScanner() {
   if (typeof window.Html5Qrcode === 'undefined') { toast('Biblioteca de QR Code não carregada', 'error'); return; }
+  const el = document.getElementById('qr-reader');
+  if (!el) return; // modal fechou ou prova ainda não selecionada
   _qrScanner = new window.Html5Qrcode('qr-reader');
   _qrScanner.start(
     { facingMode: 'environment' },
@@ -364,27 +381,71 @@ function stopQrScanner() {
   }
 }
 
+// Depois de um scan rejeitado (prova errada, duplicidade, hash inválido), a tela
+// do scanner continua aberta — só pausa a câmera brevemente e retoma sozinha,
+// pra não disparar o mesmo frame em loop nem precisar reabrir o modal
+function resumeQrScannerAfterError() {
+  if (!_qrScanner) return;
+  try { _qrScanner.pause(true); } catch (_) {}
+  setTimeout(() => {
+    if (_qrScanner) { try { _qrScanner.resume(); } catch (_) {} }
+  }, 1800);
+}
+
 async function onQrScanSuccess(decodedText) {
-  stopQrScanner();
-  S.modal = null; render();
+  let payload;
   try {
-    const payload = JSON.parse(decodedText);
-    const { requisitoId, pontos, hash } = payload || {};
-    if (!requisitoId || pontos === undefined || !hash) throw new Error('QR Code inválido');
+    payload = JSON.parse(decodedText);
+  } catch {
+    toast('QR Code inválido', 'error');
+    resumeQrScannerAfterError();
+    return;
+  }
+  const { requisitoId, varianteId, pontos, hash } = payload || {};
+  if (!requisitoId || !varianteId || pontos === undefined || !hash) {
+    toast('QR Code inválido', 'error');
+    resumeQrScannerAfterError();
+    return;
+  }
 
-    await verifyQrPayload({ requisitoId, pontos, hash }, getToken());
+  if (requisitoId !== S.qrSelectedReqId) {
+    toast('⚠️ Este QR Code pertence a uma prova diferente da que você selecionou.', 'error');
+    resumeQrScannerAfterError();
+    return;
+  }
 
-    const req = S.requirements.find(r => r.id === requisitoId);
-    if (!req) throw new Error('Requisito não encontrado');
-    if (reqFilledBy(req) !== 'conselheiro') throw new Error('Este requisito não é do tipo Conselheiro');
-
-    const already = S.submissions.find(s => s.requirementId === requisitoId && s.status === 'approved');
-    if (already) { toast('Este requisito já foi registrado nesta unidade.', 'info'); return; }
-
-    await redeemQrSubmission(S.user, req);
-    showBanner(`✅ ${req.name} — ${pontos} pts registrados na unidade!`);
+  try {
+    await verifyQrPayload({ requisitoId, varianteId, pontos, hash }, getToken());
   } catch (e) {
-    toast(e.message || 'Erro ao processar QR Code', 'error');
+    toast(e.message || 'QR Code inválido ou adulterado', 'error');
+    resumeQrScannerAfterError();
+    return;
+  }
+
+  const req = S.requirements.find(r => r.id === requisitoId);
+  if (!req) {
+    toast('Requisito não encontrado', 'error');
+    resumeQrScannerAfterError();
+    return;
+  }
+
+  // Trava de duplicidade: (unitId, requirementId-pai) — não pelo id da variante,
+  // então a unidade só pode pontuar UMA variante desta prova, nunca duas
+  const already = S.submissions.find(s => s.requirementId === requisitoId && s.status === 'approved');
+  if (already) {
+    toast('Esta unidade já registrou pontuação para esta prova.', 'error');
+    resumeQrScannerAfterError();
+    return;
+  }
+
+  const variant = (req.qrVariants || []).find(v => v.id === varianteId);
+  stopQrScanner();
+  S.modal = null; S.qrSelectedReqId = null; render();
+  try {
+    await redeemQrSubmission(S.user, req, variant);
+    showBanner(`✅ ${req.name} — ${variant?.label || ''} (${pontos} pts) registrado na unidade!`);
+  } catch (e) {
+    toast(e.message || 'Erro ao registrar pontuação', 'error');
   }
 }
 
@@ -445,13 +506,20 @@ window.W = {
   openPhoto(url)  { S.photoUrl = url; S.modal = 'photo'; render(); },
 
   openQrScanner() {
+    S.qrSelectedReqId = null;
     S.modal = 'qr-scanner';
+    render();
+  },
+  selectQrProva(reqId) {
+    stopQrScanner(); // troca de prova no meio do escaneamento reinicia a câmera
+    S.qrSelectedReqId = reqId;
     render();
     setTimeout(startQrScanner, 50); // espera o #qr-reader existir no DOM
   },
   closeQrScanner() {
     stopQrScanner();
     S.modal = null;
+    S.qrSelectedReqId = null;
     render();
   },
 

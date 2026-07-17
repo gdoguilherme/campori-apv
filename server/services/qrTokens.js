@@ -5,15 +5,15 @@ if (!SECRET) {
   throw new Error('QR_SECRET env var não configurada');
 }
 
-// Assina {requirementId, points} — o mesmo par sempre gera o mesmo hash,
-// então o QR impresso continua válido mesmo depois de reiniciar o servidor
-function signQr(requirementId, points) {
-  return crypto.createHmac('sha256', SECRET).update(`${requirementId}:${points}`).digest('hex').slice(0, 16);
+// Assina {requirementId, variantId, points} — a mesma combinação sempre gera o
+// mesmo hash, então o QR impresso continua válido mesmo após reiniciar o servidor
+function signQr(requirementId, variantId, points) {
+  return crypto.createHmac('sha256', SECRET).update(`${requirementId}:${variantId}:${points}`).digest('hex').slice(0, 16);
 }
 
-function verifyQr(requirementId, points, hash) {
+function verifyQr(requirementId, variantId, points, hash) {
   if (!hash || typeof hash !== 'string') return false;
-  const expected = signQr(requirementId, points);
+  const expected = signQr(requirementId, variantId, points);
   const a = Buffer.from(expected);
   const b = Buffer.from(hash);
   if (a.length !== b.length) return false;

@@ -4,23 +4,23 @@ const { requireAuth } = require('../middleware/requireAuth');
 
 const router = express.Router();
 
-// Gera o hash de um QR Code para um requisito (impresso previamente pelo admin)
-router.post('/generate', requireAuth(['superadmin', 'admin']), (req, res) => {
-  const { requirementId, points } = req.body || {};
-  if (!requirementId || typeof points !== 'number') {
-    return res.status(400).json({ error: 'requirementId e points são obrigatórios' });
+// Gera o hash de uma variante de QR Code de um requisito (Fiscal exibe/imprime na prova física)
+router.post('/generate', requireAuth(['superadmin', 'admin', 'judge']), (req, res) => {
+  const { requirementId, variantId, points } = req.body || {};
+  if (!requirementId || !variantId || typeof points !== 'number') {
+    return res.status(400).json({ error: 'requirementId, variantId e points são obrigatórios' });
   }
-  const hash = signQr(requirementId, points);
-  res.json({ requisitoId: requirementId, pontos: points, hash });
+  const hash = signQr(requirementId, variantId, points);
+  res.json({ requisitoId: requirementId, varianteId: variantId, pontos: points, hash });
 });
 
 // Valida um QR Code escaneado (qualquer usuário autenticado — ex: Conselheiro)
 router.post('/verify', requireAuth(), (req, res) => {
-  const { requisitoId, pontos, hash } = req.body || {};
-  if (!requisitoId || typeof pontos !== 'number' || !hash) {
+  const { requisitoId, varianteId, pontos, hash } = req.body || {};
+  if (!requisitoId || !varianteId || typeof pontos !== 'number' || !hash) {
     return res.status(400).json({ error: 'QR Code inválido' });
   }
-  if (!verifyQr(requisitoId, pontos, hash)) {
+  if (!verifyQr(requisitoId, varianteId, pontos, hash)) {
     return res.status(401).json({ error: 'QR Code inválido ou adulterado' });
   }
   res.json({ valid: true });

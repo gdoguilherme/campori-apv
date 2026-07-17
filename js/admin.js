@@ -8,7 +8,7 @@ import {
   createRegion as apiCreateRegion, updateRegion as apiUpdateRegion, delRegion as apiDelRegion,
   createParticipant, updateParticipant, deleteParticipant as apiDeleteParticipant, createParticipantsBulk,
   createUnit, updateUnit, deleteUnit as apiDeleteUnit, allocateParticipant,
-  computeUnitScores, computeStars, generateQrPayload,
+  computeUnitScores, computeStars,
   subDisciplinaryActions, createDisciplinaryAction, deleteDisciplinaryAction as apiDeleteDiscipline,
   CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS, AREAS_ATUACAO, FILLED_BY
 } from './api.js';
@@ -26,7 +26,6 @@ const S = {
   editingReq: null, editingUser: null, editingRegion: null, editingParticipant: null, editingUnit: null,
   formRole: null, generatedPwd: '', createdCreds: null,
   importRows: [], importErrors: [],
-  qrReq: null, qrLoading: false, qrError: null,
   photoUrl: null, modal: null,
   loading: false,
 };
@@ -126,7 +125,6 @@ function render() {
   else if (S.modal === 'unit-form')          html += mUnitForm();
   else if (S.modal === 'unit-participants')  html += mUnitParticipants();
   else if (S.modal === 'counselor-form')     html += mCounselorForm();
-  else if (S.modal === 'qr-code')            html += mQrCode();
   else if (S.modal === 'discipline-form')    html += mDisciplineForm();
   else if (S.modal === 'credentials')    html += mCredentialsModal();
   else if (S.modal === 'photo')          html += mPhoto();
@@ -276,14 +274,13 @@ function tReqs() {
                 ? `<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.competitionCategory}</span>` : ''}
               <span class="badge-fiscal">${type === 'conselheiro' ? '🏕️' : type === 'fiscal' ? '⚖️' : '📍'} ${FILLED_BY[type]}</span>
               ${req.subItems?.length ? `<span style="background:#f5f3ff;color:#6d28d9;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">📊 ${req.subItems.length} sub</span>` : ''}
+              ${req.qrVariants?.length ? `<span style="background:#f0fdf4;color:#166534;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">🔲 ${req.qrVariants.length} QR</span>` : ''}
               ${req.active === false ? `<span style="background:#fee2e2;color:#dc2626;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">Inativo</span>` : ''}
             </div>
             <div style="font-weight:700;color:#1e293b;font-size:.9rem;">${req.name}</div>
             ${req.description ? `<div style="font-size:.78rem;color:#64748b;margin-top:.15rem;">${req.description}</div>` : ''}
           </div>
           <div style="display:flex;gap:.375rem;flex-shrink:0;">
-            ${type === 'conselheiro' ? `<button onclick="W.openQrCode('${req.id}')"
-              style="background:#f0fdf4;border:none;color:#166534;padding:.5rem;border-radius:.625rem;cursor:pointer;">🔲</button>` : ''}
             <button onclick="W.openReqForm('${req.id}')"
               style="background:#eff6ff;border:none;color:#1d4ed8;padding:.5rem;border-radius:.625rem;cursor:pointer;">✏️</button>
             <button onclick="W.delReq('${req.id}')"
@@ -807,6 +804,7 @@ function mReqForm() {
   const subItems = r.subItems || [];
   const subTotal = subItems.reduce((a, si) => a + Number(si.points || 0), 0);
   const hasSub   = subItems.length > 0;
+  const qrVariants = r.qrVariants || [];
   const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
   const sel = (id, opts, cur) =>
     `<select id="${id}" style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
@@ -875,6 +873,30 @@ function mReqForm() {
           <input id="rq-pts" type="number" value="${hasSub ? subTotal : (r.points || '')}" placeholder="Ex: 50"
             ${hasSub ? 'readonly' : ''}
             style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;${hasSub ? 'background:#f8fafc;' : ''}">
+        </div>
+
+        <div style="border:1.5px solid #e2e8f0;border-radius:.875rem;padding:1rem;background:#fafafa;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;">
+            <div>
+              <div style="font-size:.85rem;font-weight:700;color:#374151;">🔲 Variantes de QR Code (opcional)</div>
+              <div style="font-size:.72rem;color:#94a3b8;">Cada variante vira um QR Code próprio, com sua pontuação. Ex: Básica 50 pts, Avançada 100 pts.</div>
+            </div>
+            <button onclick="W.addQrVariant()"
+              style="background:#0D2B6E;color:#fff;border:none;padding:.375rem .75rem;border-radius:.625rem;font-size:.8rem;font-weight:700;cursor:pointer;flex-shrink:0;">+ Add</button>
+          </div>
+          <div id="qrvariants-list">
+            ${qrVariants.map((v, i) => `
+            <div class="qr-variant-row" data-id="${v.id || ''}" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
+              <input class="qv-label" type="text" value="${v.label || ''}" placeholder="Nome da variante (ex: Básica)"
+                style="flex:1;border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.625rem;font-size:.85rem;outline:none;">
+              <input class="qv-points" type="number" value="${v.points || 0}" min="0" placeholder="pts"
+                style="width:70px;border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.625rem;font-size:.85rem;outline:none;text-align:center;">
+              <button onclick="W.removeQrVariant(${i})"
+                style="background:#fef2f2;border:none;color:#ef4444;padding:.5rem;border-radius:.5rem;cursor:pointer;flex-shrink:0;">🗑️</button>
+            </div>`).join('')}
+          </div>
+          ${qrVariants.length === 0 ? `<div style="font-size:.75rem;color:#94a3b8;text-align:center;">Sem variantes — este requisito não terá QR Code</div>` : ''}
+          <div style="font-size:.7rem;color:#94a3b8;margin-top:.375rem;">Os QR Codes são gerados e exibidos só na tela do Fiscal de Prova, depois de salvar.</div>
         </div>
 
         ${isEdit ? `
@@ -1213,31 +1235,6 @@ function mCounselorForm() {
   </div>`;
 }
 
-// ── MODAL: QR CODE DO REQUISITO ─────────────────────────────────
-function mQrCode() {
-  const req = S.qrReq;
-  if (!req) return '';
-  return `
-  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
-    <div class="modal-content" style="max-width:380px;text-align:center;">
-      <h2 style="font-size:1.1rem;font-weight:800;color:#1e293b;margin:0 0 .25rem;">🔲 QR Code</h2>
-      <p style="font-size:.85rem;color:#64748b;margin:0 0 1rem;">${req.name} · <strong>${req.points} pts</strong></p>
-      <div style="display:flex;align-items:center;justify-content:center;min-height:280px;">
-        ${S.qrLoading ? `<div class="spinner"></div>` : ''}
-        ${S.qrError ? `<p style="color:#dc2626;font-size:.85rem;">${S.qrError}</p>` : ''}
-        <div id="qr-code-container" style="${S.qrLoading || S.qrError ? 'display:none;' : ''}"></div>
-      </div>
-      <p style="font-size:.75rem;color:#94a3b8;margin:1rem 0;">Imprima e leve para a prova física. O Conselheiro escaneia no portal dele para registrar os pontos da unidade.</p>
-      <button onclick="window.print()" ${S.qrLoading || S.qrError ? 'disabled' : ''}
-        style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1rem;border-radius:1rem;font-weight:800;cursor:pointer;margin-bottom:.625rem;opacity:${S.qrLoading || S.qrError ? .6 : 1};">
-        🖨️ Imprimir
-      </button>
-      <button onclick="W.closeModal()"
-        style="width:100%;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Fechar</button>
-    </div>
-  </div>`;
-}
-
 // ── MODAL: REGISTRAR INFRAÇÃO ────────────────────────────────────
 function mDisciplineForm() {
   const type = S.disciplineTargetType;
@@ -1414,6 +1411,28 @@ window.W = {
     S.editingReq = { ...S.editingReq, subItems: current };
     render();
   },
+  addQrVariant() {
+    const rows = [...document.querySelectorAll('#qrvariants-list .qr-variant-row')];
+    const current = rows.map(row => ({
+      id: row.dataset.id || `qv_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+      label: row.querySelector('.qv-label').value,
+      points: parseInt(row.querySelector('.qv-points').value) || 0
+    }));
+    current.push({ id: `qv_${Date.now()}`, label: '', points: 0 });
+    S.editingReq = { ...S.editingReq, qrVariants: current };
+    render();
+  },
+  removeQrVariant(idx) {
+    const rows = [...document.querySelectorAll('#qrvariants-list .qr-variant-row')];
+    const current = rows.map(row => ({
+      id: row.dataset.id || '',
+      label: row.querySelector('.qv-label').value,
+      points: parseInt(row.querySelector('.qv-points').value) || 0
+    }));
+    current.splice(idx, 1);
+    S.editingReq = { ...S.editingReq, qrVariants: current };
+    render();
+  },
   async saveReq() {
     const name     = document.getElementById('rq-name')?.value?.trim();
     const code     = document.getElementById('rq-code')?.value?.trim() || name?.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -1434,6 +1453,12 @@ window.W = {
     const pts = subItems.length > 0
       ? subItems.reduce((a, si) => a + si.points, 0)
       : parseInt(document.getElementById('rq-pts')?.value) || 0;
+    const qrRows = [...document.querySelectorAll('#qrvariants-list .qr-variant-row')];
+    const qrVariants = qrRows.map((row, i) => ({
+      id: row.dataset.id || `qv_${i}_${Date.now()}`,
+      label: row.querySelector('.qv-label').value.trim(),
+      points: parseInt(row.querySelector('.qv-points').value) || 0
+    })).filter(v => v.label);
     if (!name) { toast('Nome é obrigatório', 'error'); return; }
     if (!pts)  { toast('Pontuação inválida', 'error'); return; }
     S.loading = true; render();
@@ -1442,7 +1467,8 @@ window.W = {
         ...(S.editingReq?.id ? { id: S.editingReq.id } : {}),
         name, code, description: desc || '', category: cat, phase, points: pts,
         competitionCategory: compCat, areaAtuacao, filledBy,
-        subItems: subItems.length > 0 ? subItems : null, active
+        subItems: subItems.length > 0 ? subItems : null,
+        qrVariants: qrVariants.length > 0 ? qrVariants : null, active
       }, S.requirements.length);
       S.modal = null; S.editingReq = null;
       toast('Requisito salvo! ✅');
@@ -1716,28 +1742,6 @@ window.W = {
       await refreshUsers();
     } catch (e) { toast(e.message || 'Erro ao vincular.', 'error'); }
     S.loading = false; render();
-  },
-
-  async openQrCode(reqId) {
-    const req = S.requirements.find(r => r.id === reqId);
-    if (!req) return;
-    S.qrReq = req; S.qrError = null; S.qrLoading = true;
-    S.modal = 'qr-code'; render();
-    try {
-      if (typeof window.QRCode === 'undefined') throw new Error('Biblioteca de QR Code não carregada');
-      const { requisitoId, pontos, hash } = await generateQrPayload(req.id, req.points, getToken());
-      const payload = JSON.stringify({ requisitoId, pontos, hash });
-      S.qrLoading = false; render();
-      // renderiza no #qr-code-container após o modal existir no DOM
-      setTimeout(() => {
-        const el = document.getElementById('qr-code-container');
-        if (el) new window.QRCode(el, { text: payload, width: 260, height: 260 });
-      }, 30);
-    } catch (e) {
-      S.qrLoading = false;
-      S.qrError = e.message || 'Erro ao gerar QR Code.';
-      render();
-    }
   },
 
   // ── Disciplina ─────────────────────────────────────────────

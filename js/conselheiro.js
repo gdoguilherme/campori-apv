@@ -121,8 +121,14 @@ function vPortal() {
   <div style="min-height:100dvh;background:#f0f4f8;">
     <div style="background:linear-gradient(135deg,${tc.primary},${tc.primary2});color:#fff;padding:1rem 1rem 1.5rem;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
-        <span style="font-size:.8rem;color:${tc.muted};">👤 ${S.user.name}</span>
+        <div style="display:flex;align-items:center;gap:.625rem;">
+          <div style="border-radius:.4rem;overflow:hidden;line-height:0;">
+            <img src="/assets/logo-integros-selo.png" alt="ÍNTEGROS" style="height:1.75rem;width:auto;object-fit:contain;display:block;">
+          </div>
+          <span style="font-size:.8rem;color:${tc.muted};">👤 ${S.user.name}</span>
+        </div>
         <div style="display:flex;gap:.5rem;align-items:center;">
+          <img src="/assets/logo-apv.png" alt="APV" style="height:1.3rem;width:auto;object-fit:contain;opacity:.85;">
           <button onclick="W.openChangePwd()"
             style="background:rgba(0,0,0,.2);border:none;color:rgba(255,255,255,.8);
             padding:.375rem .7rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔑</button>

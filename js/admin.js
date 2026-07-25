@@ -157,6 +157,9 @@ function vAdmin() {
     <div class="admin-sidebar-overlay ${S.sidebarOpen ? 'open' : ''}" onclick="W.toggleSidebar(false)"></div>
     <nav class="admin-sidebar ${S.sidebarOpen ? 'open' : ''}">
       <div style="padding:1.25rem 1rem 1rem;">
+        <div style="border-radius:.5rem;overflow:hidden;display:inline-block;margin-bottom:.625rem;line-height:0;">
+          <img src="/assets/logo-integros-selo.png" alt="ÍNTEGROS" style="height:2.1rem;width:auto;object-fit:contain;display:block;">
+        </div>
         <div style="font-size:.78rem;color:#bbf7d0;margin-bottom:.2rem;">
           👤 ${S.user.name} · ${ROLES[S.user.role] || S.user.role}
         </div>
@@ -176,6 +179,10 @@ function vAdmin() {
         <button onclick="W.logout()"
           style="background:rgba(0,0,0,.2);border:none;color:#fff;text-align:left;
           padding:.625rem .875rem;border-radius:.625rem;font-size:.85rem;cursor:pointer;">🚪 Sair</button>
+        <div style="display:flex;align-items:center;gap:.4rem;padding:.375rem .25rem 0;opacity:.6;">
+          <img src="/assets/logo-apv.png" alt="APV" style="height:1.1rem;width:auto;object-fit:contain;">
+          <span style="font-size:.65rem;color:#bbf7d0;">Associação Paulista do Vale</span>
+        </div>
       </div>
     </nav>
 

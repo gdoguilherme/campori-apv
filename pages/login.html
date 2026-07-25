@@ -4,7 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Entrar — ÍNTEGROS · III Campori de Líderes APV</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230D2B6E'/%3E%3Ctext x='32' y='45' font-family='Arial,Helvetica,sans-serif' font-size='34' font-weight='900' fill='%23D4A017' text-anchor='middle'%3EI%3C/text%3E%3C/svg%3E">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon/favicon-16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/assets/favicon/favicon-180.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="../css/base.css">
 </head>
@@ -62,11 +64,10 @@ function render() {
       <div style="font-size:.75rem;margin-top:.375rem;color:#92400e;">Guarde estas credenciais antes de continuar!</div>
     </div>` : ''}
 
-    <div style="text-align:center;margin-bottom:2rem;">
-      <div style="font-size:3.5rem;margin-bottom:.5rem;">⛺</div>
-      <h1 style="font-size:1.9rem;font-weight:800;color:#fff;margin:0;letter-spacing:.05em;">ÍNTEGROS</h1>
-      <p style="color:#F5C830;font-size:.9rem;font-weight:700;margin:.3rem 0 0;">III Campori de Líderes APV</p>
-      <p style="color:rgba(255,255,255,.75);font-size:.78rem;margin:.15rem 0 0;">Associação Paulista do Vale</p>
+    <div style="text-align:center;margin-bottom:1.5rem;">
+      <img src="/assets/logo-integros-completo.png" alt="ÍNTEGROS — III Campori de Líderes APV"
+        style="height:11rem;width:auto;object-fit:contain;filter:drop-shadow(0 6px 18px rgba(0,0,0,.35));margin-bottom:.25rem;">
+      <p style="color:rgba(255,255,255,.75);font-size:.78rem;margin:.1rem 0 0;">Associação Paulista do Vale</p>
     </div>
 
     <div style="background:#fff;border-radius:1.5rem;padding:2rem;width:100%;max-width:340px;">
@@ -97,6 +98,11 @@ function render() {
       <div style="font-weight:800;color:#1e293b;font-size:.9rem;margin-bottom:.75rem;text-align:center;">🏆 Ranking Geral das Unidades</div>
       ${rankingHtml}
     </div>` : ''}
+
+    <div style="display:flex;align-items:center;gap:.5rem;margin-top:1.75rem;opacity:.85;">
+      <img src="/assets/logo-apv.png" alt="APV" style="height:1.6rem;width:auto;object-fit:contain;">
+      <span style="color:rgba(255,255,255,.75);font-size:.72rem;">Um evento da Associação Paulista do Vale</span>
+    </div>
   </div>`;
 }
 

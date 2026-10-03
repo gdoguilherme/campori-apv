@@ -26,3 +26,10 @@ server/*firebase-adminsdk*.json
 
 # Fly.io
 server/.fly/
+
+# Servidor local (offline) — dados do evento, logs, backups, segredos
+local-server/data/
+local-server/logs/
+local-server/backups/
+local-server/.env
+!local-server/.env.example

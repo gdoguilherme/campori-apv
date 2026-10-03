@@ -2,6 +2,10 @@ import {
   db, collection, doc, addDoc, updateDoc, deleteDoc, getDocs,
   query, where, orderBy, onSnapshot, serverTimestamp
 } from './firebase.js';
+import { reqFilledBy, computeUnitScores, computeStars, findQrDuplicate, DISCIPLINE_POINTS } from '../shared/scoring.js';
+
+// Regras de pontuação vivem em shared/scoring.js (também usado pelo servidor local offline)
+export { reqFilledBy, computeUnitScores, computeStars, findQrDuplicate, DISCIPLINE_POINTS };
 
 // ── CONSTANTES ─────────────────────────────────────────────────
 
@@ -38,10 +42,6 @@ async function apiFetch(path, { method = 'GET', body, token } = {}) {
 // ── HELPERS ────────────────────────────────────────────────────
 
 export const rname = id => _regionCache.find(r => r.id === id)?.name || id;
-
-// Tipo do requisito ('regional'|'conselheiro'|'fiscal') — com fallback pro campo
-// antigo `evaluatedBy` em requisitos criados antes da Fase 6 (nunca migrados no banco)
-export const reqFilledBy = req => req.filledBy || (req.evaluatedBy === 'fiscal' ? 'fiscal' : 'regional');
 
 export function fmtDate(ts) {
   if (!ts) return '—';
@@ -490,69 +490,7 @@ export async function uploadFile(file, regionId, reqCode) {
 
 // ── SCORING ───────────────────────────────────────────────────
 
-// Pontuação por UNIDADE (substitui o antigo computeScores por região):
-// - submission sem unitId (enviada/aprovada pela região, ou avaliada pelo Fiscal
-//   no nível da região) → pontua TODAS as unidades daquela região
-// - submission com unitId (enviada pelo Conselheiro, ou avaliada pelo Fiscal
-//   no nível da unidade) → pontua só aquela unidade
-// Unidades são mistas (sem separação DBV/AVT) — não há catFilter aqui.
-export function computeUnitScores(submissions, units, disciplinaryActions = []) {
-  const scores = {};
-  units.forEach(u => { scores[u.id] = { name: u.name, regionId: u.regionId, total: 0, count: 0 }; });
-
-  const counted = new Set();
-  [...submissions]
-    .filter(s => s.status === 'approved')
-    .sort((a, b) => (b.submittedAt?.seconds || 0) - (a.submittedAt?.seconds || 0))
-    .forEach(s => {
-      if (s.unitId) {
-        if (!scores[s.unitId]) return;
-        const key = `${s.unitId}:${s.requirementId}`;
-        if (counted.has(key)) return;
-        counted.add(key);
-        scores[s.unitId].total += s.requirementPoints || 0;
-        scores[s.unitId].count++;
-      } else {
-        const regionUnits = units.filter(u => u.regionId === s.regionId);
-        if (regionUnits.length === 0) return;
-        const key = `${s.regionId}:${s.requirementId}`;
-        if (counted.has(key)) return;
-        counted.add(key);
-        regionUnits.forEach(u => {
-          scores[u.id].total += s.requirementPoints || 0;
-          scores[u.id].count++;
-        });
-      }
-    });
-
-  // Disciplina: desconta pontos da unidade específica, ou de todas as unidades
-  // da região (não altera "count" de aprovações — é só uma penalidade de pontos)
-  disciplinaryActions.forEach(d => {
-    const pts = d.points || 5;
-    if (d.targetType === 'unit') {
-      if (scores[d.targetId]) scores[d.targetId].total -= pts;
-    } else if (d.targetType === 'region') {
-      units.filter(u => u.regionId === d.targetId).forEach(u => {
-        if (scores[u.id]) scores[u.id].total -= pts;
-      });
-    }
-  });
-  Object.values(scores).forEach(s => { s.total = Math.max(0, s.total); });
-
-  return Object.entries(scores).map(([id, v]) => ({ id, ...v })).sort((a, b) => b.total - a.total);
-}
-
 // ── ESTRELAS / RANKING ANÔNIMO ─────────────────────────────────
-
-// Classificação relativa à maior pontuação (não a um total fixo de pontos possíveis):
-// ⭐⭐⭐ 80-100% · ⭐⭐ 60-79% · ⭐ abaixo de 59%
-export function computeStars(total, maxTotal) {
-  if (!maxTotal || total <= 0) return 0;
-  const pct = (total / maxTotal) * 100;
-  if (pct >= 80) return 3;
-  if (pct >= 60) return 2;
-  return 1;
-}
 
 // HTML do ranking anônimo (posição + pontos + estrelas, sem nome/região) —
 // reaproveitado no login, portal da região e portal do conselheiro
@@ -603,7 +541,7 @@ export function subDisciplinaryActions(onUpdate) {
 export async function createDisciplinaryAction(data, currentUser) {
   await addDoc(collection(db, 'disciplinaryActions'), {
     targetType: data.targetType, targetId: data.targetId, targetName: data.targetName,
-    reason: data.reason, points: 5,
+    reason: data.reason, points: DISCIPLINE_POINTS,
     createdAt: serverTimestamp(), createdBy: currentUser?.username || 'admin', createdByName: currentUser?.name || 'Administrador'
   });
 }

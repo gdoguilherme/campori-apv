@@ -2,7 +2,7 @@ import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatc
 import {
   subUnitById, subParticipantsByUnit, subRegions, setRegionCache, subReqs, subSubsByUnit,
   rname, toast, showBanner, updatePassword, addSubmission, uploadFile, updateSubmissionProof, reqFilledBy,
-  subUnits, subSubs, computeUnitScores, renderAnonRanking, verifyQrPayload, redeemQrSubmission,
+  subUnits, subSubs, computeUnitScores, findQrDuplicate, renderAnonRanking, verifyQrPayload, redeemQrSubmission,
   subDisciplinaryActions
 } from './api.js';
 
@@ -437,7 +437,7 @@ async function onQrScanSuccess(decodedText) {
 
   // Trava de duplicidade: (unitId, requirementId-pai) — não pelo id da variante,
   // então a unidade só pode pontuar UMA variante desta prova, nunca duas
-  const already = S.submissions.find(s => s.requirementId === requisitoId && s.status === 'approved');
+  const already = findQrDuplicate(S.submissions, S.user.unitId, requisitoId);
   if (already) {
     toast('Esta unidade já registrou pontuação para esta prova.', 'error');
     resumeQrScannerAfterError();

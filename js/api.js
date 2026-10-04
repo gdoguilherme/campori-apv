@@ -2,6 +2,8 @@ import {
   db, collection, doc, addDoc, updateDoc, deleteDoc, getDocs,
   query, where, orderBy, onSnapshot, serverTimestamp
 } from './firebase.js';
+import { CLOUD_URL, TIMEOUTS } from './config.js';
+import { fetchJson, serverFetch, HttpError, NetError } from './net.js';
 import { reqFilledBy, computeUnitScores, computeStars, findQrDuplicate, DISCIPLINE_POINTS } from '../shared/scoring.js';
 
 // Regras de pontuação vivem em shared/scoring.js (também usado pelo servidor local offline)
@@ -23,19 +25,20 @@ export const AREAS_ATUACAO = ['Administração','Nas Casas','Templos e Ruas','Ac
 // Quem preenche/envia o requisito — substitui o antigo `evaluatedBy` ('both'|'fiscal'|'region')
 export const FILLED_BY = { regional: 'Regional', conselheiro: 'Conselheiro', fiscal: 'Só Fiscal' };
 export const SCORE_PCTS = [0, 30, 50, 70, 100];
-export const UPLOAD_SERVER = 'https://campori-apv-upload.fly.dev';
-const SERVER_BASE = UPLOAD_SERVER; // mesmo servidor Express (Fly.io) hospeda upload + autenticação/usuários
+export const UPLOAD_SERVER = CLOUD_URL; // mesmo servidor Express (Fly.io) hospeda upload + autenticação/usuários
 
-// Chamada JSON autenticada (opcional) ao backend — usada por tudo que toca a coleção `users`,
-// que não é mais lida/escrita direto do client (ver firestore.rules)
-async function apiFetch(path, { method = 'GET', body, token } = {}) {
+// Chamada JSON autenticada (opcional) ao backend — sempre com timeout (nunca fica pendurada).
+// via 'cloud' (padrão): sempre a nuvem — é onde vivem os dados do Firestore (CRUD de usuários/regiões,
+//   troca de senha), então NÃO pode ir parar no servidor local por engano.
+// via 'auto': servidor local primeiro (timeout curto) e nuvem como reserva — login e sync do Conselheiro.
+async function apiFetch(path, { method = 'GET', body, token, timeout = TIMEOUTS.api, via = 'cloud' } = {}) {
+  if (via === 'auto') return serverFetch(path, { method, body, token, timeout });
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${SERVER_BASE}${path}`, {
+  const { ok, status, data } = await fetchJson(`${CLOUD_URL}${path}`, {
     method, headers, body: body !== undefined ? JSON.stringify(body) : undefined
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  }, timeout);
+  if (!ok) throw new HttpError(status, data);
   return data;
 }
 
@@ -69,9 +72,9 @@ export function toast(msg, type = 'success') {
   setTimeout(() => t.remove(), 3500);
 }
 
-export function showBanner(msg) {
+export function showBanner(msg, color = '#15803d') {
   const b = document.createElement('div');
-  b.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:998;background:#15803d;color:#fff;
+  b.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:998;background:${color};color:#fff;
     text-align:center;padding:1.1rem 1rem;font-size:1rem;font-weight:800;
     box-shadow:0 4px 20px rgba(0,0,0,.2);animation:slideDown .3s ease;`;
   b.innerHTML = msg;
@@ -199,7 +202,16 @@ export async function fetchUsers(token) {
 
 // Login e verificação de senha (bcrypt) acontecem no backend — retorna { user, token }
 export async function loginUser(username, password) {
-  return apiFetch('/users/login', { method: 'POST', body: { username, password } });
+  const body = { username, password };
+  try {
+    return await apiFetch('/users/login', { method: 'POST', body, via: 'auto' });
+  } catch (e) {
+    // servidor local no ar, mas o usuário foi criado na nuvem depois da última cópia → tenta a nuvem
+    if (e instanceof HttpError && e.status === 401 && /não encontrado/i.test(e.message)) {
+      try { return await apiFetch('/users/login', { method: 'POST', body }); } catch (e2) { if (!(e2 instanceof NetError)) throw e2; }
+    }
+    throw e;
+  }
 }
 
 // Cria admin inicial se não houver nenhum usuário; retorna a senha gerada ou null
@@ -378,35 +390,8 @@ export async function generateQrPayload(requirementId, variantId, points, token)
   return apiFetch('/qr/generate', { method: 'POST', token, body: { requirementId, variantId, points } });
 }
 
-export async function verifyQrPayload(payload, token) {
-  return apiFetch('/qr/verify', { method: 'POST', token, body: payload });
-}
-
-// Registra a pontuação de um QR já validado — aprovado automaticamente
-// (a verificação presencial já aconteceu na hora da prova física).
-// A trava de duplicidade é por (unitId, requirementId) — feita pelo caller antes
-// de chamar esta função — não pelo id da variante, já que a unidade só pode
-// pontuar UMA variante daquela prova.
-export async function redeemQrSubmission(user, req, variant) {
-  const ref = await addDoc(collection(db, 'submissions'), {
-    regionId: user.regionId || null,
-    regionName: user.regionId ? rname(user.regionId) : null,
-    unitId: user.unitId || null,
-    requirementId: req.id, requirementName: req.name,
-    requirementPoints: variant?.points ?? req.points, requirementCategory: req.category,
-    qrVariantId: variant?.id || null, qrVariantLabel: variant?.label || null,
-    competitionCategory: req.competitionCategory || 'Ambos',
-    notes: variant?.label ? `Registrado via QR Code — variante: ${variant.label}` : 'Registrado via QR Code',
-    proofUrl: null,
-    status: 'approved',
-    source: 'qr', fiscalSuggestion: false,
-    submittedAt: serverTimestamp(),
-    submittedBy: user.username, submittedByName: user.name,
-    reviewedAt: serverTimestamp(), reviewedBy: 'qr', reviewedByName: 'QR Code',
-    requirementDeadlineSnapshot: req.deadline || null
-  });
-  return ref.id;
-}
+// Registro de pontuação por QR Code: ver js/scanQueue.js (fila offline + POST /sync/scans).
+// A validação do hash e a trava de duplicidade acontecem no servidor, na sincronização.
 
 // ── PARTICIPANTS ──────────────────────────────────────────────
 
@@ -482,9 +467,8 @@ export async function uploadFile(file, regionId, reqCode) {
   fd.append('file', file);
   fd.append('reqCode', reqCode || 'geral');
   fd.append('regionId', regionId || 'geral');
-  const res = await fetch(`${UPLOAD_SERVER}/upload`, { method: 'POST', body: fd });
-  const data = await res.json();
-  if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+  const { ok, status, data } = await fetchJson(`${UPLOAD_SERVER}/upload`, { method: 'POST', body: fd }, TIMEOUTS.upload);
+  if (!ok || data.error) throw new Error(data.error || `HTTP ${status}`);
   return data.url;
 }
 

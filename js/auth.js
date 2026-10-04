@@ -1,47 +1,61 @@
+// Sessão em localStorage (sobrevive a fechar/reabrir o app — necessário para o Conselheiro
+// operar em campo sem sinal). A expiração acompanha o `exp` do JWT: 5 dias para Conselheiro
+// (evento inteiro), 8h para os demais perfis.
 const SESSION_KEY = 'campori_v3_session';
-const SESSION_TTL = 8 * 60 * 60 * 1000; // 8 horas
+const HOUR = 3600_000;
+const ttlFor = role => (role === 'counselor' ? 5 * 24 * HOUR : 8 * HOUR);
+
+const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* quota/privado */ } };
+
+function jwtExp(token) {
+  try {
+    const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const { exp } = JSON.parse(atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4)));
+    return exp ? exp * 1000 : null;
+  } catch { return null; }
+}
+
+function read() {
+  let raw = lsGet(SESSION_KEY);
+  if (!raw) {
+    // migração: sessão antiga (guardada em sessionStorage antes desta versão)
+    try {
+      raw = sessionStorage.getItem(SESSION_KEY);
+      if (raw) { lsSet(SESSION_KEY, raw); sessionStorage.removeItem(SESSION_KEY); }
+    } catch { /* ignora */ }
+  }
+  try { return raw ? JSON.parse(raw) : null; } catch { return null; }
+}
 
 export function saveSession(user, token) {
-  const raw = sessionStorage.getItem(SESSION_KEY);
-  const prevToken = (() => { try { return JSON.parse(raw)?.token; } catch { return null; } })();
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify({
-    user,
-    token: token || prevToken || null,
-    expiresAt: Date.now() + SESSION_TTL
-  }));
+  const prev = read();
+  const tok = token || prev?.token || null;
+  // token novo → vale até o `exp` dele; sem token novo (ex: troca de senha) mantém o prazo atual
+  const expiresAt = token
+    ? (jwtExp(token) ?? Date.now() + ttlFor(user.role))
+    : (prev?.expiresAt ?? Date.now() + ttlFor(user.role));
+  lsSet(SESSION_KEY, JSON.stringify({ user, token: tok, expiresAt }));
 }
 
 export function getSession() {
-  try {
-    const raw = sessionStorage.getItem(SESSION_KEY);
-    if (!raw) return null;
-    const { user, expiresAt } = JSON.parse(raw);
-    if (Date.now() > expiresAt) {
-      sessionStorage.removeItem(SESSION_KEY);
-      return null;
-    }
-    return user;
-  } catch {
-    return null;
-  }
+  const s = read();
+  if (!s) return null;
+  if (Date.now() > s.expiresAt) { clearSession(); return null; }
+  return s.user;
 }
 
-// Token JWT emitido pelo backend (server/) — usado nas chamadas autenticadas
-// dos endpoints que tocam a coleção `users` (login, troca de senha, CRUD de usuários/regiões)
+// Token JWT emitido pelo backend — usado nas chamadas autenticadas
 export function getToken() {
-  try {
-    const raw = sessionStorage.getItem(SESSION_KEY);
-    if (!raw) return null;
-    const { token, expiresAt } = JSON.parse(raw);
-    if (Date.now() > expiresAt) return null;
-    return token || null;
-  } catch {
-    return null;
-  }
+  const s = read();
+  if (!s || Date.now() > s.expiresAt) return null;
+  return s.token || null;
 }
 
+// Só a SESSÃO. A fila offline (IndexedDB) nunca é apagada aqui — ver js/scanQueue.js.
 export function clearSession() {
-  sessionStorage.removeItem(SESSION_KEY);
+  try { localStorage.removeItem(SESSION_KEY); } catch { /* ignora */ }
+  try { sessionStorage.removeItem(SESSION_KEY); } catch { /* ignora */ }
 }
 
 export function portalUrlForUser(user) {

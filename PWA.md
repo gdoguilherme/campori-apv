@@ -48,9 +48,8 @@ for (const k of await caches.keys()) await caches.delete(k);
 ```
 
 ## Pendências conhecidas (para as próximas fases)
-1. **Sessão some ao fechar o app.** `js/auth.js` guarda a sessão em `sessionStorage`; ao
-   fechar/reabrir o app o conselheiro cai no login, e **logar exige rede/servidor**. Em campo
-   sem sinal isso é um problema real → mover para `localStorage` (mantendo o TTL de 8 h).
+1. ~~**Sessão some ao fechar o app.**~~ ✅ Resolvido na Fase 3: a sessão agora fica em `localStorage`
+   (Conselheiro: 5 dias; demais perfis: 8 h). Ver [OFFLINE.md](OFFLINE.md).
 2. **HTTPS vs servidor local.** O PWA instalado vem de `https://…`; o navegador **bloqueia**
    chamadas dele para `http://IP-local` (mixed content), e a página em `http://IP-local` não
    pode registrar service worker. Precisa decidir (Fase 3/4): certificado HTTPS válido para o

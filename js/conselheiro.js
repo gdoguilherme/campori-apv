@@ -1,10 +1,17 @@
 import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatcher } from './auth.js';
 import {
-  subUnitById, subParticipantsByUnit, subRegions, setRegionCache, subReqs, subSubsByUnit,
   rname, toast, showBanner, updatePassword, addSubmission, uploadFile, updateSubmissionProof, reqFilledBy,
-  subUnits, subSubs, computeUnitScores, findQrDuplicate, renderAnonRanking, verifyQrPayload, redeemQrSubmission,
-  subDisciplinaryActions
+  renderAnonRanking, setRegionCache
 } from './api.js';
+import { isDeadlinePassed } from '../shared/scoring.js';
+import { evaluateOfflineScan } from '../shared/sync.js';
+import { getServerState, onServerChange, resolveServer, isCloudReachable, withTimeout } from './net.js';
+import { TIMEOUTS } from './config.js';
+import { isPersistent, requestPersistence } from './offlineDb.js';
+import {
+  STATUS, listQueue, enqueueScan, syncNow, refreshSnapshot, loadSnapshot, clearSnapshot,
+  startAutoSync, onQueueChange, onAutoSyncResult, getSyncState
+} from './scanQueue.js';
 
 // ── CONFIGURAÇÃO POR MODALIDADE (herdada da região da unidade) ──
 const THEMES = {
@@ -13,62 +20,89 @@ const THEMES = {
 };
 
 // ── ESTADO ────────────────────────────────────────────────────
+// Os dados da unidade vêm do SNAPSHOT guardado no aparelho (IndexedDB) e são atualizados pelo
+// servidor ativo (local → nuvem). Sem rede o portal abre e funciona com o último snapshot.
 const S = {
   user: null,
+  snapshot: null,      // { data, updatedAt, source } — última atualização baixada
   unit: null,
   participants: [],
   requirements: [],
-  submissions: [],
-  allSubmissions: [], // todas as submissions do sistema — só pro ranking geral anônimo
-  units: [],
-  disciplinaryActions: [],
+  submissions: [],     // submissions da unidade (confirmadas pelo servidor)
+  ranking: [],         // ranking anônimo [{ total }]
+  queue: [],           // fila de scans deste aparelho/usuário (IndexedDB)
+  net: { kind: 'none', online: true },
+  sync: {},
   selectedReq: null,
   photoFile: null,
   photoUrl: null,
   qrSelectedReqId: null, // prova selecionada antes de escanear
-  modal: null,   // 'submit' | 'photo' | 'change-password' | 'qr-scanner'
+  modal: null,   // 'submit' | 'photo' | 'change-password' | 'qr-scanner' | 'logout-confirm'
   loading: false,
 };
 
-let _unsubUnit = null, _unsubParticipants = null, _unsubRegions = null, _unsubReqs = null, _unsubSubs = null,
-    _unsubAllUnits = null, _unsubAllSubs = null, _unsubDiscipline = null;
-
 // ── INIT ──────────────────────────────────────────────────────
-export function init() {
+export async function init() {
   const user = guardPage(['counselor']);
   if (!user) return;
   S.user = user;
   startExpiryWatcher();
+  requestPersistence(); // pede ao navegador para não apagar a fila/dados quando faltar espaço
 
-  _unsubRegions  = subRegions(regs => { setRegionCache(regs); render(); });
-  _unsubReqs     = subReqs(reqs => { S.requirements = reqs; render(); });
-  _unsubAllUnits = subUnits(units => { S.units = units; render(); });
-  _unsubAllSubs  = subSubs(null, subs => { S.allSubmissions = subs; render(); });
-  _unsubDiscipline = subDisciplinaryActions(actions => { S.disciplinaryActions = actions; render(); });
-
-  if (user.unitId) {
-    _unsubUnit         = subUnitById(user.unitId, unit => { S.unit = unit; render(); });
-    _unsubParticipants = subParticipantsByUnit(user.unitId, ps => { S.participants = ps; render(); });
-    _unsubSubs         = subSubsByUnit(user.unitId, subs => { S.submissions = subs; render(); });
-  }
-
+  // renderiza JÁ com o que está guardado no aparelho (funciona offline)
+  await reloadFromStore();
   render();
+
+  onQueueChange(() => reloadFromStore().then(softRender));
+  onServerChange(() => reloadFromStore().then(softRender));
+  onAutoSyncResult(sum => notifySync(sum, false));
+  startAutoSync();
+  resolveServer().then(() => reloadFromStore()).then(softRender);
+  refreshSnapshot();
+}
+
+let _reloading = false, _again = false;
+async function reloadFromStore() {
+  if (_reloading) { _again = true; return; }
+  _reloading = true;
+  try {
+    do {
+      _again = false;
+      S.queue = await listQueue(S.user.id);
+      applySnapshot(await loadSnapshot(S.user.id));
+      S.net = getServerState();
+      S.sync = getSyncState();
+    } while (_again);
+  } finally { _reloading = false; }
+}
+
+function applySnapshot(snap) {
+  S.snapshot = snap;
+  const d = snap?.data;
+  S.unit = d?.unit || null;
+  S.participants = d?.participants || [];
+  S.requirements = d?.requirements || [];
+  S.submissions = d?.submissions || [];
+  S.ranking = d?.ranking || [];
+  if (d?.regions) setRegionCache(d.regions);
 }
 
 // ── HELPERS ───────────────────────────────────────────────────
 function theme() { return S.user.competitionCategory === 'AVT' ? 'avt' : 'dbv'; }
 
-function isDeadlinePassed(req) {
-  if (!req.deadline) return false;
-  const d = req.deadline.toDate ? req.deadline.toDate() : new Date(req.deadline);
-  return Date.now() > d.getTime();
-}
-
 function fmtDeadline(ts) {
   if (!ts) return null;
-  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  const d = ts.toDate ? ts.toDate() : new Date(typeof ts.seconds === 'number' ? ts.seconds * 1000 : ts);
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
+
+const fmtClock = ms => new Date(ms).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+function ago(ms) {
+  const m = Math.floor((Date.now() - ms) / 60000);
+  return m < 1 ? 'agora há pouco' : m < 60 ? `há ${m} min` : m < 1440 ? `há ${Math.floor(m / 60)} h` : `há ${Math.floor(m / 1440)} d`;
+}
+const esc = v => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const pendingItems = () => S.queue.filter(q => q.status === STATUS.PENDENTE);
 
 // ── RENDER ────────────────────────────────────────────────────
 function render() {
@@ -79,8 +113,13 @@ function render() {
   else if (S.modal === 'photo')      html += mPhoto();
   else if (S.modal === 'change-password') html += mChangePassword();
   else if (S.modal === 'qr-scanner') html += mQrScanner();
+  else if (S.modal === 'logout-confirm') html += mLogoutConfirm();
   el.innerHTML = html;
 }
+
+// Atualizações em segundo plano (rede, fila, snapshot) NÃO re-renderizam com modal aberto:
+// recriar o DOM destruiria a câmera do scanner / o formulário em preenchimento.
+function softRender() { if (!S.modal) render(); }
 
 // ── VIEW: PORTAL ──────────────────────────────────────────────
 function vPortal() {
@@ -104,21 +143,35 @@ function vPortal() {
   const visibleReqs = S.requirements.filter(r => r.active !== false && reqFilledBy(r) === 'conselheiro');
   const totalPossible = visibleReqs.reduce((a, r) => a + (r.points || 0), 0);
 
+  // Submission que representa o requisito no card: aprovada > pendente > mais recente.
+  // Registros "substituídos" (scan de QR que perdeu para um mais antigo de outro aparelho)
+  // não contam — a unidade já pontuou pelo outro.
+  const rank = s => (s.status === 'approved' ? 2 : s.status === 'pending' ? 1 : 0);
   const subByReq = {};
-  S.submissions.forEach(s => {
+  S.submissions.filter(s => s.qrConflict !== 'superseded').forEach(s => {
     const cur = subByReq[s.requirementId];
-    if (!cur || (s.submittedAt?.seconds || 0) > (cur.submittedAt?.seconds || 0))
+    if (!cur || rank(s) > rank(cur) || (rank(s) === rank(cur) && (s.submittedAt?.seconds || 0) > (cur.submittedAt?.seconds || 0)))
       subByReq[s.requirementId] = s;
   });
-  const approvedPts = S.submissions
+  const approvedFromServer = S.submissions
     .filter(s => s.status === 'approved')
     .reduce((a, s) => a + (s.requirementPoints || 0), 0);
-  const pendingPts = S.submissions
+  // scan já aceito pelo servidor mas que o snapshot ainda não trouxe (até a próxima atualização)
+  const knownIds = new Set(S.submissions.map(s => s.id));
+  const approvedExtra = S.queue
+    .filter(q => q.status === STATUS.SINCRONIZADO && q.submissionId && !knownIds.has(q.submissionId))
+    .reduce((a, q) => a + (q.pontos || 0), 0);
+  const approvedPts = approvedFromServer + approvedExtra;           // ✅ confirmados pelo servidor
+  const queuedPts = pendingItems().reduce((a, q) => a + (q.pontos || 0), 0); // 🕓 só no aparelho — ainda NÃO contam
+  const pendingPts = S.submissions                                  // ⏳ comprovações aguardando aprovação do admin
     .filter(s => s.status === 'pending')
     .reduce((a, s) => a + (s.requirementPoints || 0), 0);
+  const queueByReq = {};
+  pendingItems().forEach(q => { queueByReq[q.requisitoId] = q; });
 
   return `
   <div style="min-height:100dvh;background:#f0f4f8;">
+    ${statusBar()}
     <div style="background:linear-gradient(135deg,${tc.primary},${tc.primary2});color:#fff;padding:1rem 1rem 1.5rem;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
         <div style="display:flex;align-items:center;gap:.625rem;">
@@ -146,17 +199,21 @@ function vPortal() {
         <span style="background:rgba(255,255,255,.2);color:#fff;font-size:.72rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">👥 ${members.length} participante${members.length !== 1 ? 's' : ''}</span>
       </div>
 
-      <div style="display:flex;gap:.625rem;">
-        <div style="background:rgba(255,255,255,.18);border-radius:.875rem;padding:.75rem 1rem;text-align:center;flex:1;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;">
+        <div id="pts-confirmed" style="background:rgba(255,255,255,.18);border-radius:.875rem;padding:.65rem .75rem;text-align:center;">
           <div style="font-size:1.5rem;font-weight:800;">${approvedPts}</div>
-          <div style="font-size:.68rem;color:${tc.muted};">pts aprovados</div>
+          <div style="font-size:.68rem;color:${tc.muted};">✅ pts confirmados</div>
         </div>
-        <div style="background:rgba(255,255,255,.18);border-radius:.875rem;padding:.75rem 1rem;text-align:center;flex:1;">
-          <div style="font-size:1.5rem;font-weight:800;color:#fde68a;">${pendingPts}</div>
-          <div style="font-size:.68rem;color:${tc.muted};">pts pendentes</div>
+        <div id="pts-queued" style="background:rgba(251,191,36,.22);border:1px dashed rgba(253,230,138,.7);border-radius:.875rem;padding:.65rem .75rem;text-align:center;">
+          <div style="font-size:1.5rem;font-weight:800;color:#fde68a;">${queuedPts}</div>
+          <div style="font-size:.68rem;color:#fde68a;">🕓 na fila (ainda não contam)</div>
         </div>
-        <div style="background:rgba(255,255,255,.18);border-radius:.875rem;padding:.75rem 1rem;text-align:center;flex:1;">
-          <div style="font-size:1.5rem;font-weight:800;color:#bbf7d0;">${totalPossible}</div>
+        <div style="background:rgba(255,255,255,.18);border-radius:.875rem;padding:.65rem .75rem;text-align:center;">
+          <div style="font-size:1.25rem;font-weight:800;">${pendingPts}</div>
+          <div style="font-size:.68rem;color:${tc.muted};">⏳ aguardando aprovação</div>
+        </div>
+        <div style="background:rgba(255,255,255,.18);border-radius:.875rem;padding:.65rem .75rem;text-align:center;">
+          <div style="font-size:1.25rem;font-weight:800;color:#bbf7d0;">${totalPossible}</div>
           <div style="font-size:.68rem;color:${tc.muted};">pts possíveis</div>
         </div>
       </div>
@@ -171,10 +228,12 @@ function vPortal() {
       ${visibleReqs.length === 0
         ? `<div style="text-align:center;padding:2.5rem 1rem;color:#94a3b8;">
             <div style="font-size:2.5rem;">📋</div>
-            <p style="font-weight:600;margin:.5rem 0 0;">Nenhum requisito de Conselheiro cadastrado ainda</p>
+            <p style="font-weight:600;margin:.5rem 0 0;">${S.snapshot ? 'Nenhum requisito de Conselheiro cadastrado ainda' : 'Dados ainda não baixados. Conecte-se ao servidor ao menos uma vez.'}</p>
            </div>`
-        : visibleReqs.map(req => reqCard(req, subByReq[req.id], tc)).join('')}
+        : visibleReqs.map(req => reqCard(req, subByReq[req.id], tc, queueByReq[req.id])).join('')}
     </div>
+
+    ${qrHistory()}
 
     <div style="padding:0 1rem 5rem;display:flex;flex-direction:column;gap:.625rem;">
       <div style="font-weight:800;color:#1e293b;margin:.5rem 0 .25rem;">Participantes da Unidade</div>
@@ -200,20 +259,79 @@ function vPortal() {
     <div style="padding:0 1rem 5rem;">
       <div class="card" style="padding:1rem;">
         <div style="font-weight:800;color:#1e293b;font-size:.9rem;margin-bottom:.75rem;">🏆 Ranking Geral das Unidades</div>
-        ${renderAnonRanking(computeUnitScores(S.allSubmissions, S.units, S.disciplinaryActions))}
+        ${renderAnonRanking(S.ranking)}
       </div>
     </div>
   </div>`;
 }
 
-function reqCard(req, sub, tc) {
+// ── BARRA DE ESTADO (online/offline, servidor, pendentes, última atualização) ──
+function statusBar() {
+  const net = S.net, sy = S.sync, pend = pendingItems().length;
+  const offline = net.kind === 'none' || net.online === false;
+  let bg, label;
+  if (sy.authExpired) { bg = '#b45309'; label = `🔐 Sessão expirada — entre de novo para enviar ${pend ? pend + ' registro(s) guardado(s)' : 'os dados'}`; }
+  else if (offline)   { bg = '#b91c1c'; label = '🔴 Sem conexão — os QR Codes ficam guardados no aparelho'; }
+  else if (net.kind === 'local') { bg = '#15803d'; label = '🟢 Online · servidor local'; }
+  else                { bg = '#15803d'; label = '🟢 Online · nuvem'; }
+  const upd = S.snapshot ? `Atualizado ${fmtClock(S.snapshot.updatedAt)} (${ago(S.snapshot.updatedAt)})` : 'Dados ainda não baixados';
+  return `
+  <div id="status-bar" style="position:sticky;top:0;z-index:60;background:${bg};color:#fff;padding:.5rem .875rem;font-size:.78rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;">
+      <span id="net-label" style="font-weight:700;">${label}</span>
+      ${pend > 0 ? `<span id="pending-count" style="background:rgba(255,255,255,.25);border-radius:999px;padding:.15rem .6rem;font-weight:800;">🕓 ${pend} pendente${pend > 1 ? 's' : ''}</span>` : ''}
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-top:.3rem;">
+      <span id="last-update" style="opacity:.9;">${upd}</span>
+      ${sy.authExpired
+        ? `<button onclick="W.reloginKeepQueue()" style="background:#fff;color:#92400e;border:none;border-radius:.5rem;padding:.3rem .7rem;font-weight:800;font-size:.75rem;cursor:pointer;">Entrar</button>`
+        : `<button id="btn-sync" onclick="W.syncManual()" ${sy.syncing ? 'disabled' : ''} style="background:rgba(255,255,255,.22);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:.5rem;padding:.3rem .7rem;font-weight:800;font-size:.75rem;cursor:pointer;opacity:${sy.syncing ? .6 : 1};">${sy.syncing ? '⏳ Sincronizando…' : '🔄 Sincronizar agora'}</button>`}
+    </div>
+    ${sy.lastError ? `<div style="margin-top:.25rem;opacity:.9;">⚠️ ${esc(sy.lastError)}</div>` : ''}
+    ${!isPersistent() ? `<div style="margin-top:.25rem;background:rgba(0,0,0,.25);border-radius:.4rem;padding:.25rem .5rem;">⚠️ Armazenamento do aparelho indisponível (aba anônima?): registros offline se perdem ao fechar o app.</div>` : ''}
+  </div>`;
+}
+
+// ── REGISTROS DE QR CODE deste aparelho, com o estado de cada um ──
+function qrHistory() {
+  if (S.queue.length === 0) return '';
+  const row = q => {
+    // aceito na hora, mas depois outro aparelho da unidade (scan mais antigo) tomou o lugar
+    const lost = q.status === STATUS.SINCRONIZADO && S.submissions.some(s => s.id === q.submissionId && s.qrConflict === 'superseded');
+    const [icon, bg, fg, txt] =
+      lost ? ['⚠️', '#fef3c7', '#92400e', 'Substituído — outro aparelho da unidade escaneou esta prova antes e o registro dele foi mantido']
+      : q.status === STATUS.SINCRONIZADO ? ['✅', '#d1fae5', '#065f46', 'Sincronizado']
+      : q.status === STATUS.DUPLICADO  ? ['⚠️', '#fef3c7', '#92400e', 'Duplicado — esta unidade já tinha pontuado nesta prova']
+      : q.status === STATUS.REJEITADO  ? ['❌', '#fee2e2', '#991b1b', `Rejeitado — ${esc(q.message || 'o servidor recusou este QR Code')}`]
+      : ['🕓', '#dbeafe', '#1e40af', 'Pendente, aguardando conexão'];
+    return `
+    <div class="qr-row" data-status="${lost ? 'substituido' : q.status}" style="background:#fff;border:1px solid #e2e8f0;border-radius:.875rem;padding:.7rem .875rem;">
+      <div style="display:flex;justify-content:space-between;gap:.5rem;align-items:flex-start;">
+        <div style="min-width:0;">
+          <div style="font-weight:700;color:#1e293b;font-size:.85rem;">${esc(q.requirementName || q.requisitoId)}</div>
+          <div style="font-size:.74rem;color:#64748b;">${esc(q.variantLabel || q.varianteId)} · ${q.pontos} pts · escaneado ${fmtClock(q.scanTimestamp)}</div>
+        </div>
+        <span style="font-size:1.25rem;">${icon}</span>
+      </div>
+      <div style="margin-top:.4rem;background:${bg};color:${fg};font-size:.76rem;font-weight:700;border-radius:.5rem;padding:.3rem .6rem;">${txt}</div>
+    </div>`;
+  };
+  return `
+    <div id="qr-history" style="padding:0 1rem 1rem;display:flex;flex-direction:column;gap:.5rem;">
+      <div style="font-weight:800;color:#1e293b;margin:.25rem 0;">📷 Registros por QR Code <span style="font-weight:400;color:#94a3b8;font-size:.75rem;">(este aparelho)</span></div>
+      ${S.queue.slice(0, 15).map(row).join('')}
+    </div>`;
+}
+
+function reqCard(req, sub, tc, queued) {
   const isApproved = sub?.status === 'approved';
   const isPending  = sub?.status === 'pending';
   const isRejected = sub?.status === 'rejected';
   const deadlinePassed = isDeadlinePassed(req);
   const deadlineFmt    = fmtDeadline(req.deadline);
+  const isQueued = !!queued && !isApproved;
 
-  const bl = isApproved ? '4px solid #16a34a'
+  const bl = isQueued ? '4px solid #3b82f6' : isApproved ? '4px solid #16a34a'
            : isPending  ? '4px solid #f59e0b'
            : isRejected ? '4px solid #ef4444'
            : 'none';
@@ -235,6 +353,7 @@ function reqCard(req, sub, tc) {
         <div style="font-weight:700;color:#1e293b;font-size:.95rem;">${req.name}</div>
         ${req.description ? `<div style="font-size:.8rem;color:#64748b;margin-top:.2rem;">${req.description}</div>` : ''}
 
+        ${isQueued ? `<div style="margin-top:.625rem;"><span class="q-pending" style="background:#dbeafe;color:#1e40af;font-size:.8rem;font-weight:700;padding:.3rem .8rem;border-radius:999px;display:inline-block;">🕓 Pendente, aguardando conexão · ${queued.pontos} pts</span></div>` : ''}
         ${sub ? `<div style="margin-top:.625rem;">
           ${isApproved
             ? `<span style="background:#d1fae5;color:#065f46;font-size:.8rem;font-weight:700;padding:.3rem .8rem;border-radius:999px;display:inline-block;">✅ Aprovado · ${sub.requirementPoints} pts</span>`
@@ -244,11 +363,12 @@ function reqCard(req, sub, tc) {
           ${isRejected && sub.rejectionReason
             ? `<div style="font-size:.8rem;color:#b91c1c;background:#fff1f1;border-radius:.5rem;padding:.4rem .75rem;margin-top:.375rem;"><strong>Motivo:</strong> ${sub.rejectionReason}</div>` : ''}
         </div>`
-        : `<div style="margin-top:.5rem;font-size:.8rem;color:#94a3b8;">Não enviado</div>`}
+        : (isQueued ? '' : `<div style="margin-top:.5rem;font-size:.8rem;color:#94a3b8;">Não enviado</div>`)}
       </div>
 
       <div style="flex-shrink:0;padding-top:.25rem;">
-        ${isApproved  ? `<span style="font-size:1.75rem;">✅</span>`
+        ${isQueued    ? `<span style="font-size:1.75rem;">🕓</span>`
+        : isApproved  ? `<span style="font-size:1.75rem;">✅</span>`
         : isPending   ? `<span style="font-size:1.75rem;">⏳</span>`
         : deadlinePassed ? `<span style="font-size:1.5rem;">🔒</span>`
         : `<button onclick="W.openSubmit('${req.id}')"
@@ -338,18 +458,23 @@ function mQrScanner() {
   // Provas disponíveis pra esta unidade: tipo Conselheiro, com pelo menos uma variante de QR
   const provas = S.requirements.filter(r => r.active !== false && reqFilledBy(r) === 'conselheiro' && (r.qrVariants || []).length > 0);
   const selected = S.qrSelectedReqId;
+  const done = id => S.submissions.some(s => s.requirementId === id && s.status === 'approved') ||
+                     S.queue.some(q => q.requisitoId === id && (q.status === STATUS.PENDENTE || q.status === STATUS.SINCRONIZADO));
+  const offline = S.net.kind === 'none' || S.net.online === false;
 
   return `
   <div class="modal-overlay center" onclick="if(event.target===this)W.closeQrScanner()">
     <div class="modal-content" style="max-width:420px;">
       <h2 style="font-size:1.1rem;font-weight:800;color:#1e293b;margin:0 0 .75rem;">📷 Escanear QR Code</h2>
+      ${offline ? `<div style="background:#fee2e2;color:#991b1b;border-radius:.75rem;padding:.5rem .75rem;font-size:.78rem;font-weight:600;margin-bottom:.75rem;">🔴 Sem conexão: o QR será guardado no aparelho e enviado quando houver rede. A autenticidade do QR só é conferida ao sincronizar.</div>` : ''}
       <div style="margin-bottom:.875rem;">
         <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">Qual prova você está aplicando? *</label>
         <select id="qr-prova-select" onchange="W.selectQrProva(this.value)"
           style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
           <option value="" disabled ${!selected ? 'selected' : ''}>Selecione a prova...</option>
-          ${provas.map(r => `<option value="${r.id}" ${selected === r.id ? 'selected' : ''}>${r.name}</option>`).join('')}
+          ${provas.map(r => `<option value="${r.id}" ${selected === r.id ? 'selected' : ''}>${esc(r.name)}${done(r.id) ? ' ✔ (já pontuada)' : ''}</option>`).join('')}
         </select>
+        ${provas.length === 0 ? `<p style="font-size:.78rem;color:#b45309;margin:.5rem 0 0;">Nenhuma prova com QR Code baixada. Conecte-se ao servidor ao menos uma vez para baixar as provas da unidade.</p>` : ''}
       </div>
       ${selected
         ? `<div id="qr-reader" style="width:100%;border-radius:1rem;overflow:hidden;background:#000;"></div>
@@ -357,6 +482,21 @@ function mQrScanner() {
         : `<p style="font-size:.82rem;color:#94a3b8;text-align:center;padding:1.5rem 0;">Selecione a prova acima para iniciar a câmera.</p>`}
       <button onclick="W.closeQrScanner()"
         style="width:100%;margin-top:1rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: CONFIRMAR SAÍDA (com registros pendentes) ──────────
+function mLogoutConfirm() {
+  const n = pendingItems().length;
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:380px;">
+      <h2 style="font-size:1.1rem;font-weight:800;color:#1e293b;margin:0 0 .5rem;">🕓 Registros ainda não enviados</h2>
+      <p style="font-size:.88rem;color:#475569;margin:0 0 1rem;">Você tem <strong>${n} registro${n > 1 ? 's' : ''} de QR Code</strong> guardado${n > 1 ? 's' : ''} neste aparelho, sem conexão com o servidor. Se sair agora, ${n > 1 ? 'eles continuam guardados' : 'ele continua guardado'} e ${n > 1 ? 'serão enviados' : 'será enviado'} quando você entrar de novo com esta mesma conta.</p>
+      <button onclick="W.syncManual().then(()=>W.closeModal())" style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:.9rem;border-radius:.875rem;font-weight:800;cursor:pointer;">🔄 Tentar sincronizar agora</button>
+      <button id="btn-logout-anyway" onclick="W.confirmLogout()" style="width:100%;margin-top:.5rem;background:#fee2e2;color:#991b1b;border:none;padding:.9rem;border-radius:.875rem;font-weight:800;cursor:pointer;">Sair mesmo assim</button>
+      <button onclick="W.closeModal()" style="width:100%;margin-top:.375rem;padding:.75rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
     </div>
   </div>`;
 }
@@ -398,61 +538,91 @@ function resumeQrScannerAfterError() {
   }, 1800);
 }
 
+let _scanBusy = false; // a câmera dispara o callback várias vezes para o mesmo QR
+
 async function onQrScanSuccess(decodedText) {
+  if (_scanBusy) return;
+  _scanBusy = true;
+  try { await handleScan(decodedText, Date.now()); } finally { _scanBusy = false; }
+}
+
+// Fluxo: validar offline (só com dados já baixados) → entrar na FILA (IndexedDB) → tentar enviar
+// na hora. O hash NÃO é validado aqui: só o servidor tem o segredo (acontece na sincronização).
+async function handleScan(decodedText, scanTimestamp /* momento exato do escaneamento */) {
   let payload;
-  try {
-    payload = JSON.parse(decodedText);
-  } catch {
-    toast('QR Code inválido', 'error');
-    resumeQrScannerAfterError();
-    return;
+  try { payload = JSON.parse(decodedText); } catch {
+    toast('QR Code inválido', 'error'); resumeQrScannerAfterError(); return;
   }
   const { requisitoId, varianteId, pontos, hash } = payload || {};
   if (!requisitoId || !varianteId || pontos === undefined || !hash) {
-    toast('QR Code inválido', 'error');
-    resumeQrScannerAfterError();
-    return;
-  }
-
-  if (requisitoId !== S.qrSelectedReqId) {
-    toast('⚠️ Este QR Code pertence a uma prova diferente da que você selecionou.', 'error');
-    resumeQrScannerAfterError();
-    return;
-  }
-
-  try {
-    await verifyQrPayload({ requisitoId, varianteId, pontos, hash }, getToken());
-  } catch (e) {
-    toast(e.message || 'QR Code inválido ou adulterado', 'error');
-    resumeQrScannerAfterError();
-    return;
+    toast('QR Code inválido', 'error'); resumeQrScannerAfterError(); return;
   }
 
   const req = S.requirements.find(r => r.id === requisitoId);
-  if (!req) {
-    toast('Requisito não encontrado', 'error');
+  const verdict = evaluateOfflineScan({
+    selectedRequirementId: S.qrSelectedReqId, payload: { requisitoId, varianteId, pontos }, requirement: req,
+    confirmedSubs: S.submissions, queueItems: S.queue, unitId: S.user.unitId,
+  });
+  if (!verdict.ok) {
+    // prova errada / já pontuou (confirmado OU pendente na fila) / prova ou variante desconhecida
+    toast(verdict.code === 'WRONG_PROVA' ? `⚠️ ${verdict.message}` : verdict.message, 'error');
     resumeQrScannerAfterError();
     return;
   }
 
-  // Trava de duplicidade: (unitId, requirementId-pai) — não pelo id da variante,
-  // então a unidade só pode pontuar UMA variante desta prova, nunca duas
-  const already = findQrDuplicate(S.submissions, S.user.unitId, requisitoId);
-  if (already) {
-    toast('Esta unidade já registrou pontuação para esta prova.', 'error');
-    resumeQrScannerAfterError();
-    return;
-  }
+  const item = await enqueueScan({
+    user: S.user, requirement: req, variant: verdict.variant, selectedRequirementId: S.qrSelectedReqId,
+    payload: { requisitoId, varianteId, pontos, hash }, scanTimestamp,
+  });
+  try { _qrScanner?.pause(true); } catch (_) {} // não lê o mesmo QR de novo enquanto envia
 
-  const variant = (req.qrVariants || []).find(v => v.id === varianteId);
-  stopQrScanner();
-  S.modal = null; S.qrSelectedReqId = null; render();
-  try {
-    await redeemQrSubmission(S.user, req, variant);
-    showBanner(`✅ ${req.name} — ${variant?.label || ''} (${pontos} pts) registrado na unidade!`);
-  } catch (e) {
-    toast(e.message || 'Erro ao registrar pontuação', 'error');
+  // tenta enviar agora, no máximo ~4s: se não der, fica 🕓 pendente e a sincronização segue sozinha
+  const cur = await syncItemNow(item.id, TIMEOUTS.immediateScan);
+  await reloadFromStore();
+  const label = `${req.name} — ${verdict.variant.label || ''} (${verdict.variant.points} pts)`;
+
+  if (cur.status === STATUS.PENDENTE) {
+    stopQrScanner(); S.modal = null; S.qrSelectedReqId = null; render();
+    showBanner(`🕓 ${label} guardado no aparelho — será enviado quando houver conexão.`, '#b45309');
+  } else if (cur.status === STATUS.SINCRONIZADO) {
+    stopQrScanner(); S.modal = null; S.qrSelectedReqId = null; render();
+    showBanner(`✅ ${label} registrado na unidade!`);
+  } else {
+    // duplicado / rejeitado pelo servidor: mostra o motivo e MANTÉM o scanner aberto
+    toast(cur.message || (cur.status === STATUS.DUPLICADO ? 'Esta unidade já tinha pontuado nesta prova.' : 'QR Code recusado pelo servidor.'), 'error');
+    try { _qrScanner?.resume(); } catch (_) {}
   }
+}
+
+// Sincroniza até o item sair de "pendente" (ou o prazo/rede acabar). Uma sincronização já em
+// andamento pode não ter incluído o item novo — por isso repetimos até 2 vezes.
+async function syncItemNow(itemId, ms) {
+  const deadline = Date.now() + ms;
+  const read = async () => (await listQueue(S.user.id)).find(q => q.id === itemId);
+  for (let i = 0; i < 2; i++) {
+    const left = deadline - Date.now();
+    if (left <= 0) break;
+    const sum = await Promise.race([syncNow(), new Promise(r => setTimeout(() => r(null), left))]);
+    const cur = await read();
+    if (!cur || cur.status !== STATUS.PENDENTE || !sum || sum.offline || sum.authExpired || sum.error) break;
+  }
+  return (await read()) || { status: STATUS.PENDENTE };
+}
+
+// Alertas de sincronização (manual: sempre; automática: só quando há novidade)
+function notifySync(sum, manual) {
+  if (!sum) return;
+  if (sum.authExpired) { toast('🔐 Sessão expirada. Entre de novo — seus registros pendentes continuam guardados.', 'error'); return; }
+  if (sum.error) { toast(`⚠️ Erro ao sincronizar: ${sum.error}`, 'error'); return; }
+  const name = q => `"${q.requirementName || q.requisitoId}"`;
+  if (sum.accepted.length) {
+    const n = sum.accepted.length;
+    showBanner(`✅ ${n} registro${n > 1 ? 's' : ''} sincronizado${n > 1 ? 's' : ''}!`);
+  }
+  if (sum.duplicates.length) toast(`⚠️ ${sum.duplicates.map(name).join(', ')}: esta unidade já tinha pontuado nesta prova — registro não contado.`, 'error');
+  if (sum.rejected.length) toast(`❌ ${sum.rejected.map(q => `${name(q)}: ${q.message}`).join(' · ')}`, 'error');
+  if (manual && sum.offline) toast('📡 Sem conexão com o servidor. Os registros continuam guardados e serão enviados automaticamente.', 'error');
+  if (manual && !sum.offline && sum.sent === 0) toast(pendingItems().length ? '⏳ Nada foi enviado ainda. Tente de novo em instantes.' : '✅ Tudo sincronizado — nada pendente.');
 }
 
 // ── MODAL: TROCAR SENHA ───────────────────────────────────────
@@ -495,16 +665,25 @@ function mChangePassword() {
 
 // ── ACTIONS ───────────────────────────────────────────────────
 window.W = {
+  // Sair: a sessão é limpa, mas a FILA de scans pendentes fica no aparelho (IndexedDB)
+  // e é enviada quando a pessoa entrar de novo. Se há pendentes, pede confirmação antes.
   logout() {
-    if (_unsubUnit)         _unsubUnit();
-    if (_unsubParticipants) _unsubParticipants();
-    if (_unsubRegions)      _unsubRegions();
-    if (_unsubReqs)         _unsubReqs();
-    if (_unsubSubs)         _unsubSubs();
-    if (_unsubAllUnits)     _unsubAllUnits();
-    if (_unsubAllSubs)      _unsubAllSubs();
-    if (_unsubDiscipline)   _unsubDiscipline();
+    if (pendingItems().length > 0) { S.modal = 'logout-confirm'; render(); return; }
+    W.confirmLogout();
+  },
+  async confirmLogout() {
+    await clearSnapshot(S.user.id); // dados baixados (privacidade) — nunca a fila
     authLogout();
+  },
+  // Sessão expirou com fila cheia: vai ao login SEM apagar nada; após entrar a fila é enviada
+  reloginKeepQueue() { authLogout(); },
+
+  async syncManual() {
+    const sum = await syncNow({ manual: true });
+    await refreshSnapshot();
+    await reloadFromStore();
+    notifySync(sum, true);
+    softRender();
   },
 
   closeModal()    { S.modal = null; render(); },
@@ -552,33 +731,39 @@ window.W = {
     const req = S.requirements.find(r => r.id === S.selectedReq);
     if (!req) return;
 
-    const d = req.deadline?.toDate ? req.deadline.toDate() : (req.deadline ? new Date(req.deadline) : null);
-    if (d && Date.now() > d.getTime()) {
+    if (isDeadlinePassed(req)) {
       toast('Prazo para este requisito foi encerrado', 'error');
       return;
     }
 
     const notes = document.getElementById('sub-notes')?.value || '';
+    // Comprovação (foto) grava direto na nuvem: sem internet, avisa na hora em vez de deixar
+    // o botão preso. (Só o registro por QR Code funciona offline.)
+    if (!(await isCloudReachable())) {
+      toast('📡 Sem internet: enviar comprovação exige conexão com a nuvem. Só o QR Code funciona offline.', 'error');
+      return;
+    }
     S.loading = true; render();
 
     try {
-      const subId = await addSubmission(S.user, req, notes, null);
+      const subId = await withTimeout(addSubmission(S.user, req, notes, null), 20000, 'Tempo esgotado ao enviar. Verifique a conexão e tente de novo.');
       const fileToUpload = S.photoFile;
       S.modal = null; S.selectedReq = null; S.photoFile = null; S.loading = false;
       render();
       showBanner('✅ Requisito registrado! Aguardando aprovação.');
+      refreshSnapshot();
 
       if (fileToUpload) {
         try {
           const url = await uploadFile(fileToUpload, S.user.unitId, req.code || req.id);
-          await updateSubmissionProof(subId, url);
+          await withTimeout(updateSubmissionProof(subId, url), 20000, 'Tempo esgotado ao anexar o arquivo');
           toast('📎 Arquivo enviado com sucesso!');
         } catch (e) {
           toast(`⚠️ Falha no upload: ${e.message}`, 'error');
         }
       }
     } catch (e) {
-      toast('Erro ao enviar. Tente novamente.', 'error');
+      toast(e?.name === 'NetError' ? e.message : 'Erro ao enviar. Tente novamente.', 'error');
       S.loading = false; render();
     }
   },
@@ -604,3 +789,11 @@ window.W = {
     S.loading = false; render();
   },
 };
+
+// Gancho de teste (SÓ em localhost): simula a leitura de um QR sem câmera
+if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+  window.__camporiTest = {
+    scan: text => onQrScanSuccess(text), state: () => S,
+    select: id => { S.qrSelectedReqId = id; S.modal = 'qr-scanner'; render(); }, // sem ligar a câmera
+  };
+}

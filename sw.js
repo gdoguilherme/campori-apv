@@ -4,7 +4,7 @@
 // A lista e a VERSION são geradas por `node scripts/build-sw.mjs` (rodar antes de cada deploy).
 
 /* BUILD:START */
-const VERSION = 'd4238f310e';
+const VERSION = '6d7ca3b0bf';
 const SHELL = [
   "/assets/favicon/favicon-16.png",
   "/assets/favicon/favicon-180.png",
@@ -21,11 +21,15 @@ const SHELL = [
   "/js/admin.js",
   "/js/api.js",
   "/js/auth.js",
+  "/js/config.js",
   "/js/conselheiro.js",
   "/js/firebase.js",
   "/js/fiscal.js",
+  "/js/net.js",
+  "/js/offlineDb.js",
   "/js/pwa.js",
   "/js/regiao.js",
+  "/js/scanQueue.js",
   "/manifest.json",
   "/pages/admin.html",
   "/pages/conselheiro.html",
@@ -33,7 +37,8 @@ const SHELL = [
   "/pages/login.html",
   "/pages/regiao/avt.html",
   "/pages/regiao/dbv.html",
-  "/shared/scoring.js"
+  "/shared/scoring.js",
+  "/shared/sync.js"
 ];
 /* BUILD:END */
 
@@ -51,6 +56,13 @@ const SWR_EXTERNAL = new Set(['https://cdn.tailwindcss.com/']);
 
 const CACHE = `campori-shell-${VERSION}`;
 
+// fetch com prazo: o SW também não pode ficar pendurado em rede ruim (Starlink caindo)
+function timed(input, init = {}, ms = 12000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  return fetch(input, { ...init, signal: ctl.signal }).finally(() => clearTimeout(t));
+}
+
 // Respostas que passaram por redirect NÃO podem ser servidas a uma navegação; guardamos uma
 // cópia "limpa" (mesmo corpo/headers, sem a flag redirected).
 async function plain(res) {
@@ -66,7 +78,7 @@ self.addEventListener('install', event => {
     const cache = await caches.open(CACHE);
     // Arquivos do próprio site: tudo-ou-nada (um shell incompleto não abre offline)
     await Promise.all(SHELL.map(async url => {
-      const res = await fetch(url, { cache: 'reload' });
+      const res = await timed(url, { cache: 'reload' }, 30000);
       if (!res.ok) throw new Error(`precache falhou: ${url} (${res.status})`);
       await cache.put(url, await plain(res));
     }));
@@ -75,7 +87,7 @@ self.addEventListener('install', event => {
     await Promise.all(EXTERNAL.map(async url => {
       try {
         let res;
-        try { res = await fetch(url, { mode: 'cors' }); } catch { res = await fetch(url, { mode: 'no-cors' }); }
+        try { res = await timed(url, { mode: 'cors' }, 20000); } catch { res = await timed(url, { mode: 'no-cors' }, 20000); }
         if (res.ok || res.type === 'opaque') await cache.put(url, res);
       } catch { /* sem rede agora; tenta de novo no próximo update do SW */ }
     }));
@@ -111,7 +123,7 @@ async function staleWhileRevalidate(event, { navigate }) {
   const req = event.request;
   const cached = navigate ? await matchPage(cache, req.url) : await cache.match(req, { ignoreSearch: true });
   // navegação usa redirect:'manual'; pra buscar de verdade seguimos redirects e guardamos a cópia limpa
-  const network = fetch(navigate ? new Request(req.url, { credentials: 'same-origin' }) : req).then(async res => {
+  const network = timed(navigate ? new Request(req.url, { credentials: 'same-origin' }) : req).then(async res => {
     if (res && (res.ok || res.type === 'opaque')) {
       const copy = res.clone();
       cache.put(navigate ? new URL(req.url).origin + new URL(req.url).pathname : req, await plain(copy)).catch(() => {});
@@ -131,7 +143,7 @@ async function cacheFirst(event) {
   const cache = await caches.open(CACHE);
   const hit = await cache.match(event.request);
   if (hit) return hit;
-  const res = await fetch(event.request);
+  const res = await timed(event.request);
   if (res && (res.ok || res.type === 'opaque')) cache.put(event.request, res.clone()).catch(() => {});
   return res;
 }

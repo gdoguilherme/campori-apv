@@ -10,6 +10,8 @@ COPY server.js ./
 COPY routes/ ./routes/
 COPY services/ ./services/
 COPY middleware/ ./middleware/
+# gerado por `node scripts/sync-shared.mjs` (fonte: /shared) — lógica de pontuação/sync compartilhada
+COPY shared/ ./shared/
 # credentials.json e firebase-credentials.json NÃO são copiados — vêm via env vars
 # GOOGLE_CREDENTIALS_JSON / FIREBASE_CREDENTIALS_JSON no Fly.io
 

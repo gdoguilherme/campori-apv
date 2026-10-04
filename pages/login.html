@@ -28,6 +28,7 @@
 <script type="module">
 import { guardLogin, saveSession, portalUrlForUser } from '../js/auth.js';
 import { loginUser, ensureInitialAdmin, toast, fetchPublicRanking, renderAnonRanking } from '../js/api.js';
+import { withTimeout } from '../js/net.js';
 
 const app = document.getElementById('app');
 let loading = false;
@@ -52,7 +53,7 @@ async function init() {
     console.warn('Erro ao verificar usuários:', e);
   }
   try {
-    const scores = await fetchPublicRanking();
+    const scores = await withTimeout(fetchPublicRanking(), 12000, 'Tempo esgotado ao carregar o ranking');
     rankingHtml = renderAnonRanking(scores);
   } catch (e) {
     console.warn('Erro ao carregar ranking público:', e);

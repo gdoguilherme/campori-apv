@@ -26,6 +26,9 @@ Dê **dois cliques** em `C:\campori\local-server\INSTALAR.bat`.
 - Preencha a linha `QR_SECRET=` com **o mesmo valor** do QR_SECRET da nuvem (Fly.io).
   Salve e feche.
 
+- Preencha também `JWT_SECRET=` com **o mesmo valor** do JWT_SECRET da nuvem (Fly.io): é o que faz o
+  login valer nos dois servidores (o app do Conselheiro troca entre servidor local e nuvem sozinho).
+
 > ⚠️ **QR_SECRET igual ao da nuvem é obrigatório.** Se for diferente, todos os QR Codes
 > já impressos darão "QR inválido" no modo offline. (O `flyctl secrets list` não mostra o
 > valor — se ninguém guardou, é preciso definir um novo no Fly **e reimprimir os QRs**.)

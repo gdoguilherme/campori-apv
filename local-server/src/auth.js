@@ -6,8 +6,9 @@ export const ADMIN_ROLES = ['superadmin', 'admin'];
 export const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 export function createAuth({ store, config }) {
-  // Mesmo formato de token da nuvem: { sub, role }, 8h
-  const signToken = user => jwt.sign({ sub: user.id, role: user.role }, config.jwtSecret, { expiresIn: '8h' });
+  // Mesmo formato de token da nuvem: { sub, role }. Conselheiro: 5 dias (cobre o evento inteiro
+  // 9–12/10, pra a fila offline não ser rejeitada por token vencido); demais perfis: 8h.
+  const signToken = user => jwt.sign({ sub: user.id, role: user.role }, config.jwtSecret, { expiresIn: user.role === 'counselor' ? '5d' : '8h' });
 
   // allowedRoles: array de roles, ou omitido para qualquer usuário autenticado e ativo.
   // Carrega o usuário do banco (precisamos de regionId/unitId, que não vão no token).

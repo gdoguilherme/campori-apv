@@ -8,6 +8,7 @@ import { qrRouter } from './routes/qr.js';
 import { dataRouter } from './routes/data.js';
 import { businessRouter } from './routes/business.js';
 import { uploadRouter } from './routes/upload.js';
+import { syncRouter } from './routes/sync.js';
 import { COLLECTIONS } from './db.js';
 
 export function createApp({ store, config, log }) {
@@ -16,6 +17,12 @@ export function createApp({ store, config, log }) {
   const app = express();
   app.disable('x-powered-by');
 
+  // (antes do cors(): ele encerra a resposta do preflight OPTIONS)
+  // Chrome exige este cabeçalho quando um site público (https) chama um servidor de rede privada
+  app.use((req, res, next) => {
+    if (req.headers['access-control-request-private-network']) res.set('Access-Control-Allow-Private-Network', 'true');
+    next();
+  });
   app.use(cors()); // rede local do evento; a autorização é por token Bearer
   app.use(express.json({ limit: '2mb' }));
 
@@ -34,6 +41,7 @@ export function createApp({ store, config, log }) {
   app.use('/qr', qrRouter(ctx));
   app.use('/upload', uploadRouter(ctx));
   app.use('/data', dataRouter(ctx));
+  app.use('/sync', syncRouter(ctx));
   app.use('/', businessRouter(ctx));
   app.use('/files', express.static(config.uploadDir, { fallthrough: true }));
 

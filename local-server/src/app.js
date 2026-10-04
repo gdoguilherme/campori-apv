@@ -42,6 +42,14 @@ export function createApp({ store, config, log }) {
     for (const d of ['css', 'js', 'pages', 'assets', 'shared']) {
       app.use(`/${d}`, express.static(path.join(config.frontendDir, d)));
     }
+    // PWA: sw.js e manifest.json precisam estar na RAIZ (escopo "/"), sempre revalidados
+    for (const f of ['sw.js', 'manifest.json']) {
+      app.get(`/${f}`, (_req, res) => {
+        res.set('Cache-Control', 'no-cache');
+        if (f === 'manifest.json') res.type('application/manifest+json');
+        res.sendFile(path.join(config.frontendDir, f));
+      });
+    }
     app.get('/', (_req, res) => res.redirect('/pages/login.html'));
   }
 

@@ -6,7 +6,14 @@
   <title>Entrar — ÍNTEGROS · III Campori de Líderes APV</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon/favicon-32.png">
   <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon/favicon-16.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="/assets/favicon/favicon-180.png">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0D2B6E">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="ÍNTEGROS">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="apple-touch-icon" sizes="180x180" href="/assets/pwa/apple-touch-icon.png">
+  <script src="/js/pwa.js" defer></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="../css/base.css">
 </head>
@@ -35,12 +42,15 @@ if (guardLogin()) {
 }
 
 async function init() {
+  // Renderiza JÁ (o app precisa abrir mesmo sem rede / com a rede pendurada); as chamadas
+  // à nuvem rodam em segundo plano e atualizam a tela quando (e se) responderem.
+  render();
   try {
     firstRunPwd = await ensureInitialAdmin();
+    if (firstRunPwd) render();
   } catch (e) {
     console.warn('Erro ao verificar usuários:', e);
   }
-  render();
   try {
     const scores = await fetchPublicRanking();
     rankingHtml = renderAnonRanking(scores);
@@ -51,6 +61,9 @@ async function init() {
 }
 
 function render() {
+  // re-renders (ranking/admin chegando da rede) não podem apagar o que a pessoa já digitou
+  const keep = { u: document.getElementById('login-user'), p: document.getElementById('login-pwd') };
+  const saved = { u: keep.u?.value, p: keep.p?.value, focus: document.activeElement?.id };
   app.innerHTML = `
   <div style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;
     padding:1.5rem;background:linear-gradient(160deg,#0D2B6E 0%,#123a8f 55%,#1ABFCF 100%);">
@@ -104,6 +117,9 @@ function render() {
       <span style="color:rgba(255,255,255,.75);font-size:.72rem;">Um evento da Associação Paulista do Vale</span>
     </div>
   </div>`;
+  if (saved.u) document.getElementById('login-user').value = saved.u;
+  if (saved.p) document.getElementById('login-pwd').value = saved.p;
+  if (saved.focus) document.getElementById(saved.focus)?.focus();
 }
 
 window.W = {

@@ -45,6 +45,7 @@ const config = loadConfig();
 const store = new Store(config.dbPath);
 store.backupTo(path.join(config.backupDir, `antes-do-pull-${new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19)}.db`));
 for (const col of COLLECTIONS) store.replaceCollection(col, pulled[col]);
+store.setMeta('dataset', 'cloud');
 store.close();
 console.log(`\n✅ Importado para ${config.dbPath} (backup do banco anterior em ${config.backupDir})\n`);
 process.exit(0);

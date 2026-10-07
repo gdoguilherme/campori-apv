@@ -40,6 +40,9 @@ store.insert('requirements', {
   qrVariants: [{ id: 'basico', label: 'Nível básico', points: 5 }, { id: 'avancado', label: 'Nível avançado', points: 8 }]
 }, 'demoReqQR');
 store.insert('requirements', { name: 'Organização da barraca', points: 7, category: 'Acampamento', filledBy: 'conselheiro', competitionCategory: 'Ambos', order: 2, active: true }, 'demoReqB');
+// marca como DEMO: a sincronização com a nuvem nunca liga num banco de demonstração
+store.setMeta('dataset', 'demo');
+for (const c of COLLECTIONS) store.db.exec(`UPDATE "${c}" SET dirty = 0`);
 store.close();
 
 console.log(`\n✅ Banco de demonstração criado em ${config.dbPath}`);

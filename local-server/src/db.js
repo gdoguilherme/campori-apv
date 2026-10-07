@@ -6,7 +6,9 @@ import path from 'node:path';
 // Schema espelha as coleções do Firestore: UMA TABELA POR COLEÇÃO, com o documento
 // inteiro em `data` (JSON) + colunas indexadas só pros campos usados em filtros.
 // Guardar o doc como veio do Firestore garante fidelidade na sincronização (Fase 3).
-// Colunas de controle de sync: updatedAt (ms), deleted (tombstone), dirty (alterado localmente).
+// Colunas de controle de sync: updatedAt (ms), deleted (tombstone), dirty (alterado localmente e ainda
+// NÃO enviado à nuvem). Para o merge com a nuvem: baseData = última versão da nuvem que este PC viu
+// (base do merge de 3 vias); syncError/syncAttempts/syncTriedAt = falhas de envio; syncedAt = último envio ok.
 export const INDEXED = {
   regions: [],
   units: ['regionId'],
@@ -54,8 +56,25 @@ export class Store {
       for (const c of idx) this.db.exec(`CREATE INDEX IF NOT EXISTS "ix_${col}_${c}" ON "${col}"("${c}")`);
       this.db.exec(`CREATE INDEX IF NOT EXISTS "ix_${col}_upd" ON "${col}"(updatedAt)`);
     }
+    // Migração (bancos criados nas Fases 1–3 não têm as colunas de sincronização)
+    for (const col of Object.keys(INDEXED)) {
+      const have = new Set(this.db.prepare(`PRAGMA table_info("${col}")`).all().map(c => c.name));
+      for (const [name, ddl] of [['baseData', 'TEXT'], ['syncError', 'TEXT'], ['syncAttempts', 'INTEGER NOT NULL DEFAULT 0'], ['syncTriedAt', 'INTEGER'], ['syncedAt', 'INTEGER']]) {
+        if (!have.has(name)) this.db.exec(`ALTER TABLE "${col}" ADD COLUMN ${name} ${ddl}`);
+      }
+      this.db.exec(`CREATE INDEX IF NOT EXISTS "ix_${col}_dirty" ON "${col}"(dirty)`);
+    }
+    // Registro de eventos da sincronização (alertas do painel de status, erros, conflitos)
+    this.db.exec(`CREATE TABLE IF NOT EXISTS sync_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, kind TEXT NOT NULL, level TEXT NOT NULL,
+      collection TEXT, docId TEXT, message TEXT NOT NULL, data TEXT, alert INTEGER NOT NULL DEFAULT 0, ack INTEGER NOT NULL DEFAULT 0
+    )`);
     this.db.exec(`INSERT OR IGNORE INTO meta(key,value) VALUES ('revision','0')`);
   }
+
+  // ── meta (chave/valor): origem do banco, cursores e estado da sincronização ──
+  getMeta(key) { return this.db.prepare(`SELECT value FROM meta WHERE key=?`).get(key)?.value ?? null; }
+  setMeta(key, value) { this.db.prepare(`INSERT INTO meta(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(key, String(value)); }
 
   _check(col) { if (!COLLECTIONS.includes(col)) throw httpError(404, `Coleção desconhecida: ${col}`); }
   _row(col, r) { return r ? { id: r.id, ...JSON.parse(r.data) } : null; }
@@ -97,12 +116,19 @@ export class Store {
     return this.db.prepare(`SELECT COUNT(*) n FROM "${col}" WHERE deleted = 0`).get().n;
   }
 
-  _write(col, id, data, createdAt, { dirty = 1 } = {}) {
+  // Upsert: ao regravar um documento NÃO apaga baseData/syncError (INSERT OR REPLACE apagaria).
+  // opts.dirty: 1 (padrão — alteração local) ou 0 (veio da nuvem / já enviado);  opts.base: doc da nuvem a guardar como base.
+  _write(col, id, data, createdAt, { dirty = 1, base } = {}) {
     const idx = INDEXED[col];
     const vals = idx.map(c => (data[c] === undefined || data[c] === null) ? null : String(data[c]));
     const cols = ['id', ...idx.map(c => `"${c}"`), 'data', 'createdAt', 'updatedAt', 'deleted', 'dirty'];
-    const sql = `INSERT OR REPLACE INTO "${col}" (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`;
+    // updatedAt estritamente crescente por linha: é a "versão" usada para detectar edição local durante um envio
+    // (duas gravações no mesmo milissegundo não podem ficar com a mesma versão)
+    const upd = cols.filter(c => c !== 'id' && c !== 'createdAt')
+      .map(c => (c === 'updatedAt' ? `updatedAt = MAX(excluded.updatedAt, "${col}".updatedAt + 1)` : `${c} = excluded.${c}`)).join(', ');
+    const sql = `INSERT INTO "${col}" (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')}) ON CONFLICT(id) DO UPDATE SET ${upd}`;
     this.db.prepare(sql).run(id, ...vals, JSON.stringify(data), createdAt, Date.now(), 0, dirty);
+    if (base !== undefined) this.db.prepare(`UPDATE "${col}" SET baseData = ? WHERE id = ?`).run(base === null ? null : JSON.stringify(base), id);
   }
 
   insert(col, data, id = newId(), opts) {
@@ -146,10 +172,103 @@ export class Store {
     this._check(col);
     this.tx(() => {
       this.db.exec(`DELETE FROM "${col}"`);
-      for (const { id, ...doc } of docs) this._write(col, id, doc, Date.now(), { dirty: 0 });
+      for (const { id, ...doc } of docs) this._write(col, id, doc, Date.now(), { dirty: 0, base: doc });
       this._bump();
     });
   }
+
+  // ── fila de envio à nuvem (linhas dirty=1, incluindo exclusões/tombstones) ─────────────────
+  listDirty(col, { limit = 500 } = {}) {
+    this._check(col);
+    return this.db.prepare(`SELECT id, data, deleted, createdAt, updatedAt, baseData, syncAttempts, syncTriedAt, syncError FROM "${col}" WHERE dirty = 1 ORDER BY updatedAt LIMIT ?`).all(limit).map(r => ({
+      id: r.id, doc: JSON.parse(r.data), deleted: !!r.deleted, createdAt: r.createdAt, updatedAt: r.updatedAt,
+      base: r.baseData ? JSON.parse(r.baseData) : null, attempts: r.syncAttempts, triedAt: r.syncTriedAt, error: r.syncError,
+    }));
+  }
+
+  dirtyCounts() {
+    const byCollection = {}; let total = 0;
+    for (const col of COLLECTIONS) {
+      const n = this.db.prepare(`SELECT COUNT(*) n FROM "${col}" WHERE dirty = 1`).get().n;
+      if (n) byCollection[col] = n;
+      total += n;
+    }
+    return { total, byCollection };
+  }
+
+  // Marca como enviado. `expectUpdatedAt` protege contra uma edição local feita DURANTE o envio:
+  // se a linha mudou, ela continua dirty (será reenviada) e só a base é atualizada.
+  markPushed(col, id, { expectUpdatedAt, doc, hardDelete = false, baseNull = false }) {
+    this._check(col);
+    return this.tx(() => {
+      const row = this.db.prepare(`SELECT updatedAt, createdAt FROM "${col}" WHERE id = ?`).get(String(id));
+      if (!row) return 'gone';
+      const unchanged = row.updatedAt === expectUpdatedAt;
+      if (hardDelete) {
+        if (!unchanged) return 'changed-meanwhile';
+        this.db.prepare(`DELETE FROM "${col}" WHERE id = ?`).run(String(id));
+        this._bump();
+        return 'removed';
+      }
+      if (!unchanged) {
+        this.db.prepare(`UPDATE "${col}" SET baseData = ? WHERE id = ?`).run(JSON.stringify(doc), String(id));
+        return 'changed-meanwhile';
+      }
+      const { id: _i, ...clean } = doc;
+      const before = this.db.prepare(`SELECT data FROM "${col}" WHERE id = ?`).get(String(id)).data;
+      this._write(col, String(id), clean, row.createdAt, { dirty: 0, base: baseNull ? null : clean });
+      this.db.prepare(`UPDATE "${col}" SET syncError = NULL, syncAttempts = 0, syncedAt = ? WHERE id = ?`).run(Date.now(), String(id));
+      if (before !== JSON.stringify(clean)) this._bump();
+      return 'synced';
+    });
+  }
+
+  recordSyncFailure(col, id, message) {
+    this._check(col);
+    this.db.prepare(`UPDATE "${col}" SET syncError = ?, syncAttempts = syncAttempts + 1, syncTriedAt = ? WHERE id = ?`).run(String(message).slice(0, 500), Date.now(), String(id));
+  }
+
+  // Linha que a nuvem alterou/criou (nunca sobrescreve alteração local ainda não enviada).
+  applyRemote(col, id, doc) {
+    this._check(col);
+    return this.tx(() => {
+      const row = this.db.prepare(`SELECT dirty, createdAt FROM "${col}" WHERE id = ?`).get(String(id));
+      if (row?.dirty === 1) return 'skipped-dirty';
+      const { id: _i, ...clean } = doc;
+      this._write(col, String(id), clean, row?.createdAt ?? Date.now(), { dirty: 0, base: clean });
+      this._bump();
+      return row ? 'updated' : 'created';
+    });
+  }
+
+  removeRemote(col, id) {
+    this._check(col);
+    return this.tx(() => {
+      const row = this.db.prepare(`SELECT dirty FROM "${col}" WHERE id = ?`).get(String(id));
+      if (!row) return 'absent';
+      if (row.dirty === 1) return 'skipped-dirty';
+      this.db.prepare(`DELETE FROM "${col}" WHERE id = ?`).run(String(id));
+      this._bump();
+      return 'removed';
+    });
+  }
+
+  // ── eventos de sincronização (alertas, erros, conflitos) ───────────────────────────────────
+  logEvent({ kind, level = 'info', collection = null, docId = null, message, data = null, alert = false }) {
+    this.db.prepare(`INSERT INTO sync_events (ts, kind, level, collection, docId, message, data, alert) VALUES (?,?,?,?,?,?,?,?)`)
+      .run(Date.now(), kind, level, collection, docId, String(message).slice(0, 1000), data ? JSON.stringify(data) : null, alert ? 1 : 0);
+    // mantém só os últimos 500 já vistos/irrelevantes
+    this.db.prepare(`DELETE FROM sync_events WHERE id NOT IN (SELECT id FROM sync_events ORDER BY id DESC LIMIT 500)`).run();
+  }
+  listEvents({ limit = 30, alertsOnly = false, unackedOnly = false, levels = null } = {}) {
+    const where = []; const params = [];
+    if (alertsOnly) where.push('alert = 1');
+    if (unackedOnly) where.push('ack = 0');
+    if (levels) { where.push(`level IN (${levels.map(() => '?').join(',')})`); params.push(...levels); }
+    return this.db.prepare(`SELECT * FROM sync_events ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ?`).all(...params, limit)
+      .map(e => ({ ...e, data: e.data ? JSON.parse(e.data) : null, alert: !!e.alert, ack: !!e.ack }));
+  }
+  ackAlerts() { return this.db.prepare(`UPDATE sync_events SET ack = 1 WHERE alert = 1 AND ack = 0`).run().changes; }
 
   backupTo(file) {
     fs.mkdirSync(path.dirname(file), { recursive: true });

@@ -1,5 +1,5 @@
 import express from 'express';
-import { httpError } from '../db.js';
+import { httpError, newId } from '../db.js';
 import { evaluateQrScan } from '../../../shared/scoring.js';
 
 export function qrRouter({ store, auth }) {
@@ -40,7 +40,9 @@ export function qrRouter({ store, auth }) {
       });
       if (!verdict.ok) throw httpError(verdict.status, verdict.message, verdict.code);
       const { variant } = verdict;
+      const clientId = newId();      // mesmo formato dos scans da fila offline: id scan_<clientId> (idempotente na nuvem)
       return store.insert('submissions', {
+        clientId, scanTimestamp: Date.now(),
         regionId: user.regionId || null,
         regionName: user.regionId ? (store.get('regions', user.regionId)?.name ?? user.regionId) : null,
         unitId: user.unitId,
@@ -53,7 +55,7 @@ export function qrRouter({ store, auth }) {
         submittedAt: { __serverTimestamp: true }, submittedBy: user.username, submittedByName: user.name,
         reviewedAt: { __serverTimestamp: true }, reviewedBy: 'qr', reviewedByName: 'QR Code',
         requirementDeadlineSnapshot: requirement.deadline || null
-      });
+      }, `scan_${clientId}`);
     });
     res.json({ ok: true, submission: sub });
   });

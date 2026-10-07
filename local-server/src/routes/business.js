@@ -16,16 +16,24 @@ export function businessRouter({ store, auth }) {
 
   // ── RANKING ─────────────────────────────────────────────────
   // Público (tela de login): só posição, pontos e estrelas — sem nome de unidade/região
-  r.get('/ranking', (_req, res) => {
+  // `?meta=1` devolve também a origem e a hora: { source:'local', updatedAt, cloudSyncedAt, ranking|scores }.
+  // updatedAt = quando o ranking foi calculado; cloudSyncedAt = última sincronização bem-sucedida com a nuvem
+  // (para o usuário saber quão fresco é o dado em relação à nuvem). Sem `meta`, o formato antigo (lista).
+  const meta = body => ({ source: 'local', updatedAt: Date.now(), cloudSyncedAt: Number(store.getMeta('sync.lastSuccessAt')) || null, revision: store.revision(), ...body });
+
+  r.get('/ranking', (req, res) => {
     const withPts = scores().filter(s => s.total > 0);
     const max = withPts[0]?.total || 0;
-    res.json(withPts.map((s, i) => ({ position: i + 1, total: s.total, stars: computeStars(s.total, max) })));
+    const rows = withPts.map((s, i) => ({ position: i + 1, total: s.total, stars: computeStars(s.total, max) }));
+    res.json(req.query.meta ? meta({ ranking: rows }) : rows);
   });
 
-  r.get('/scores/units', requireAuth(), (_req, res) => {
+  // Identificado (admin): nome, região, pontos e estrelas por unidade
+  r.get('/scores/units', requireAuth(), (req, res) => {
     const all = scores();
     const max = all[0]?.total || 0;
-    res.json(all.map(s => ({ ...s, stars: computeStars(s.total, max) })));
+    const rows = all.map(s => ({ ...s, stars: computeStars(s.total, max) }));
+    res.json(req.query.meta ? meta({ scores: rows }) : rows);
   });
 
   // ── ENVIO (Região / Conselheiro) ────────────────────────────

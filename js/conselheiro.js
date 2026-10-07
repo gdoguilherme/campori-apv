@@ -8,6 +8,7 @@ import { evaluateOfflineScan } from '../shared/sync.js';
 import { getServerState, onServerChange, resolveServer, isCloudReachable, withTimeout } from './net.js';
 import { TIMEOUTS } from './config.js';
 import { isPersistent, requestPersistence } from './offlineDb.js';
+import { rankingStampHtml } from './ranking.js';
 import {
   STATUS, listQueue, enqueueScan, syncNow, refreshSnapshot, loadSnapshot, clearSnapshot,
   startAutoSync, onQueueChange, onAutoSyncResult, getSyncState
@@ -260,6 +261,7 @@ function vPortal() {
       <div class="card" style="padding:1rem;">
         <div style="font-weight:800;color:#1e293b;font-size:.9rem;margin-bottom:.75rem;">🏆 Ranking Geral das Unidades</div>
         ${renderAnonRanking(S.ranking)}
+        ${S.snapshot ? rankingStampHtml({ updatedAt: S.snapshot.updatedAt, source: S.snapshot.source === 'local' ? 'local' : 'cloud' }) : ''}
       </div>
     </div>
   </div>`;

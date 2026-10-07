@@ -135,3 +135,23 @@ test('/health (público) traz um resumo da sincronização', async () => {
     assert.deepEqual([h.sync.cloud, h.sync.pending], ['online', 1]); assert.equal(h.sync.lastSuccessAt, T0);
   } finally { await s.close(); }
 });
+
+test('painel traz o botão "Atualizar dados da nuvem": /status/api/pull-now só traz, e o resumo mostra a última atualização', async () => {
+  const env = makeEnv(); const s = await serve(env);
+  try {
+    assert.match((await get(s, '/status')).text, /Atualizar dados da nuvem/);
+    await s.call('POST', '/status/api/sync-now');                                      // liga os listeners e faz a carga
+    env.store.insert('participants', { name: 'Pendente', unitId: 'U1', regionId: 'R1' }, 'p-pend');        // pendência local: pull-now NÃO envia
+    env.fake._col('requirements').set('RA', { ...REF.requirements[2][1], points: 77 });                       // mudança "perdida" na nuvem
+    const r = await s.call('POST', '/status/api/pull-now');
+    assert.equal(r.json.ok, true); assert.equal(r.json.pushed, 0); assert.match(r.json.message, /atualizado\(s\)/);
+    assert.equal(env.store.get('requirements', 'RA').points, 77);
+    assert.equal(env.fake.get('participants', 'p-pend'), null, 'pull-now não envia');
+    const d = r.json.summary;
+    assert.equal(d.pull.listening, true); assert.ok(d.pull.lastPullAt); assert.equal(d.pull.ready, 7);
+    assert.equal(d.sync.pending, 1);
+    env.fake.online = false;
+    const off = await s.call('POST', '/status/api/pull-now');
+    assert.equal(off.json.offline, true); assert.match(off.json.message, /sem internet|Sem acesso/i);
+  } finally { await s.close(); }
+});

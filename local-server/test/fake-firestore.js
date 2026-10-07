@@ -44,7 +44,11 @@ export class FakeFirestore {
       ...mkQuery([]),
       onSnapshot(cb, errCb) {
         const l = { col: name, cb, errCb }; db.listeners.push(l);
-        queueMicrotask(() => cb({ docChanges: () => db.all(name).map(d => ({ type: 'added', doc: db._snap(name, d.id) })), docs: db.all(name).map(d => db._snap(name, d.id)) }));
+        // o 1º snapshot só chega se houver rede (offline/pendurado: o listener real simplesmente espera)
+        queueMicrotask(() => {
+          try { if (db._gate()) return; } catch { return; }
+          cb({ docChanges: () => db.all(name).map(d => ({ type: 'added', doc: db._snap(name, d.id) })), docs: db.all(name).map(d => db._snap(name, d.id)) });
+        });
         return () => { db.listeners = db.listeners.filter(x => x !== l); };
       },
       doc: id => ({

@@ -183,7 +183,12 @@ Abra no navegador **do PC** (ou fixe nos favoritos). Em outro aparelho, use o en
 
 - **Última sincronização** e **itens aguardando envio** ficam sempre visíveis. Mais embaixo: cada **unidade** e cada
   **requisito** com ✅ Sincronizado / 🕓 Pendente / ❌ Erro.
-- **🔄 Sincronizar agora:** responde com ✅ (deu certo), 📡 (sem acesso à nuvem — explica) ou ❌ (erro **com o motivo**).
+- **🔄 Sincronizar agora:** **envia** o que está pendente **e traz** as novidades da nuvem. Responde com ✅ (deu certo, com o
+  resumo), 📡 (sem acesso à nuvem — explica) ou ❌ (erro **com o motivo**).
+- **⬇️ Atualizar dados da nuvem:** só traz (cadastros, requisitos, usuários, aprovações feitas na nuvem...). Os dados da
+  nuvem também chegam **sozinhos** enquanto houver internet; o botão força uma conferência completa.
+- **"Última atualização vinda da nuvem"** mostra a hora e se está acompanhando em tempo real. Alteração feita neste PC e
+  ainda não enviada **nunca é apagada** por uma atualização da nuvem.
 - **⚠️ "Pontos que já estavam cadastrados":** aparece em amarelo quando a sincronização acha uma pontuação repetida (ex.: a
   unidade já tinha pontuado aquela prova na nuvem). **Avise a organização** e depois clique em "Entendi — limpar avisos".
 - Se o painel mostrar a faixa vermelha **"Não consigo falar com o servidor"**, a janela preta fechou: abra `INICIAR.bat`.
@@ -252,7 +257,9 @@ Se aparecer **"⚠️ HTTPS DESLIGADO"**, o app instalado nos celulares **não c
 ---
 
 ## O que ainda NÃO existe
-- **Trazer dados da nuvem de volta durante o evento** (o que for criado/aprovado na nuvem) e **ranking lido do servidor
-  local** — próxima etapa. Por enquanto a carga da nuvem é a do passo 4 (`pull-cloud`).
 - **Fotos/comprovantes** enviados pelo servidor local ficam no PC (o registro sobe, o arquivo não).
-- Fila offline do fiscal e do portal regional.
+- Fila offline do fiscal e do portal regional; acesso ao app sem instalação prévia.
+
+## Ranking
+Nos celulares ligados à rede do evento, o ranking (tela de login, portais e painel do admin) vem **do servidor local**;
+fora dela, da nuvem. Sempre aparece embaixo a hora da última atualização (ex.: *"Atualizado às 14:32 · servidor local"*).

@@ -59,6 +59,8 @@ export function buildSummary({ store, config, engine, startedAt, now = engine?.n
       data: { color: dataLight[0], text: dataLight[1] },
     },
     overall,
+    pull: st.pull ? { listening: st.pull.listening, lastPullAt: st.pull.lastPullAt, lastFullAt: st.pull.lastFullAt, error: st.pull.error ? st.pull.error.message : null,
+      ready: Object.values(st.pull.collections || {}).filter(c => c.ready).length } : null,
     sync: {
       enabled: st.enabled, running: !!st.push.running, pending: pendingTotal, pendingOther: other, byCollection: st.push.pending.byCollection,
       lastSuccessAt: st.push.lastSuccessAt, lastAttemptAt: st.push.lastAttemptAt, nextAttemptAt: st.push.nextAttemptAt, lastResult: st.push.lastResult,

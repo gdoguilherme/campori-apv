@@ -6,6 +6,7 @@ import {
   subDisciplinaryActions,
   CATEGORIES
 } from './api.js';
+import { loadAnonRanking, rankingStampHtml } from './ranking.js';
 
 // ── CONFIGURAÇÃO POR TEMA ──────────────────────────────────────
 const THEMES = {
@@ -45,6 +46,7 @@ const S = {
   profileLogoFile: null,
   modal: null,   // 'submit' | 'photo' | 'change-password' | 'edit-profile'
   loading: false,
+  rankInfo: null,
 };
 
 let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null, _unsubAllSubs = null,
@@ -76,6 +78,14 @@ export function init(theme) {
   _unsubDiscipline   = subDisciplinaryActions(actions => { S.disciplinaryActions = actions; render(); });
 
   render();
+  refreshRanking(); setInterval(refreshRanking, 45_000);   // ranking do servidor local (se o aparelho estiver nele) ou da nuvem
+}
+
+// Ranking anônimo: servidor local quando o aparelho está na rede do evento; senão o cálculo ao vivo da nuvem
+function refreshRanking() {
+  loadAnonRanking({ fallback: async () => computeUnitScores(S.allSubmissions, S.units, S.disciplinaryActions) })
+    .then(info => { S.rankInfo = info; if (!S.modal) render(); })
+    .catch(() => {});
 }
 
 // ── HELPERS ───────────────────────────────────────────────────
@@ -273,7 +283,12 @@ function vPortal() {
     <div style="padding:0 1rem 5rem;">
       <div class="card" style="padding:1rem;">
         <div style="font-weight:800;color:#1e293b;font-size:.9rem;margin-bottom:.75rem;">🏆 Ranking Geral das Unidades</div>
-        ${renderAnonRanking(computeUnitScores(S.allSubmissions, S.units, S.disciplinaryActions))}
+        ${(() => {
+          // fonte nuvem = cálculo ao vivo (listeners do Firestore); fonte local/cópia guardada = o que o servidor devolveu
+          const live = !S.rankInfo || S.rankInfo.source === 'cloud';
+          const rows = live ? computeUnitScores(S.allSubmissions, S.units, S.disciplinaryActions) : S.rankInfo.rows;
+          return renderAnonRanking(rows) + rankingStampHtml(live ? { updatedAt: Date.now(), source: 'cloud' } : S.rankInfo);
+        })()}
       </div>
     </div>
   </div>`;

@@ -45,5 +45,14 @@ export function statusRouter({ store, config, engine, startedAt, isLocalRequest 
       res.json({ ...result, summary: buildSummary({ store, config, engine, startedAt }) });
     } catch (e) { next(e); }
   });
+
+  // "Atualizar dados da nuvem": só traz (não envia). Responde com o resultado e o motivo se falhar.
+  r.post('/api/pull-now', guard, async (_req, res, next) => {
+    try {
+      if (!engine) return res.json({ ok: false, message: 'Sincronização indisponível neste servidor.' });
+      const result = await engine.pullNow();
+      res.json({ ...result, summary: buildSummary({ store, config, engine, startedAt }) });
+    } catch (e) { next(e); }
+  });
   return r;
 }

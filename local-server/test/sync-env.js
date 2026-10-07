@@ -27,19 +27,19 @@ export const REF = {
           ['c2', { name: 'Cons Leões', username: 'cons2', role: 'counselor', regionId: 'R1', unitId: 'U2', active: true, passwordHash: 'x' }]],
 };
 
-export function makeEnv({ config = {}, seedCloud = true } = {}) {
+export function makeEnv({ config = {}, seedCloud = true, seedLocal = true } = {}) {
   const store = new Store(':memory:');
   const fake = new FakeFirestore();
   let clock = T0;
   const logs = { info: [], warn: [], error: [] };
   const log = { info: m => logs.info.push(m), warn: m => logs.warn.push(m), error: m => logs.error.push(m) };
   for (const [col, rows] of Object.entries(REF)) {
-    store.replaceCollection(col, rows.map(([id, d]) => ({ id, ...d })));                    // local: sincronizado (dirty=0, com base)
+    if (seedLocal) store.replaceCollection(col, rows.map(([id, d]) => ({ id, ...d })));       // local: sincronizado (dirty=0, com base)
     if (seedCloud) for (const [id, d] of rows) fake.seed(col, id, toCloud(d, FakeTimestamp));
   }
   const cloud = new Cloud({ db: fake, admin: fakeAdmin, probeTimeoutMs: 120 });
   const mkEngine = (extra = {}) => createSyncEngine({ store, log, getCloud: async () => cloud, now: () => clock,
-    config: { cloudSync: true, syncRowTimeoutMs: 400, syncTickMs: 10, ...config, ...extra } });
+    config: { cloudSync: true, syncRowTimeoutMs: 400, pullTimeoutMs: 400, syncTickMs: 10, ...config, ...extra } });
   return { store, fake, cloud, logs, log, engine: mkEngine(), mkEngine, advance: ms => { clock += ms; }, now: () => clock };
 }
 

@@ -5,6 +5,7 @@
 import { COLLECTIONS } from '../db.js';
 import { classifyError, withTimeout } from './errors.js';
 import { pushRow, readCloudDoc } from './push.js';
+import { createPuller } from './pull.js';
 
 // ordem de envio: dados de referência → submissões (scans por scanTimestamp) → disciplina → auditoria
 const PUSH_ORDER = ['requirements', 'regions', 'units', 'participants', 'users', 'submissions', 'disciplinaryActions', 'auditLog'];
@@ -22,6 +23,8 @@ export function createSyncEngine({ store, config, log, getCloud, now = () => Dat
     attempts: 0, nextAttemptAt: 0, lastResult: null,
   };
   let cloud = null, inflight = null, timer = null, stopped = false;
+  const puller = createPuller({ store, log, now, readTimeoutMs: config.pullTimeoutMs });
+  const reconcileMs = () => config.pullReconcileMs ?? 2 * 3600_000;     // leitura completa de segurança a cada 2h
 
   const dataset = () => store.getMeta('dataset');
   const enabled = () => !!config.cloudSync && dataset() !== 'demo';
@@ -88,11 +91,23 @@ export function createSyncEngine({ store, config, log, getCloud, now = () => Dat
   }
 
   // ── ciclo completo: teste de conexão → envio ────────────────────────────────────────────────
-  function cycle({ manual = false } = {}) {
+  // Traz da nuvem. O primeiro start() já faz a carga completa (primeiro snapshot de cada coleção); depois só chegam mudanças.
+  async function pullAll(c, result, { manual }) {
+    const startedNow = !puller.status().listening;
+    puller.start(c);
+    if (startedNow || manual) await puller.waitReady();
+    if (!startedNow && (manual || puller.fullDue(reconcileMs()))) await puller.reconcile(c);   // leitura completa explícita
+    if (!store.getMeta('dataset') && puller.status().lastFullAt) store.setMeta('dataset', 'cloud');
+    result.pulled = puller.takeStats();
+  }
+
+  // ── ciclo completo: teste de conexão → envio → recebimento ──────────────────────────────────
+  // only: 'push' | 'pull' | undefined (os dois)
+  function cycle({ manual = false, only } = {}) {
     if (inflight) return inflight;
     inflight = (async () => {
       const t0 = now(); st.running = true; st.lastAttemptAt = t0;
-      const result = { ok: false, offline: false, pushed: 0, counts: {}, conflicts: 0, errors: [], alerts: [], message: '', at: t0 };
+      const result = { ok: false, offline: false, pushed: 0, pulled: null, counts: {}, conflicts: 0, errors: [], alerts: [], message: '', at: t0 };
       try {
         const c = await resolveCloud();
         if (!c) { result.message = st.cloudMessage; return result; }
@@ -105,15 +120,32 @@ export function createSyncEngine({ store, config, log, getCloud, now = () => Dat
         }
         setCloud(ENGINE_STATES.ONLINE); st.lastOkAt = now();
 
-        const push = await pushAll(c, result, { manual });
-        if (push.stopped) {
-          if (push.stopped === 'network') { setCloud(ENGINE_STATES.OFFLINE, push.message); result.offline = true; result.message = 'A conexão com a nuvem caiu durante o envio. O que já foi enviado está salvo; o resto continua na fila.'; }
-          else { setCloud(ENGINE_STATES.ERROR, push.message); result.message = push.stopped === 'quota' ? 'A cota do Firebase foi excedida.' : `Credenciais recusadas: ${push.message}`; }
-          backoff(); return result;
+        if (only !== 'pull') {
+          const push = await pushAll(c, result, { manual });
+          if (push.stopped) {
+            if (push.stopped === 'network') { setCloud(ENGINE_STATES.OFFLINE, push.message); result.offline = true; result.message = 'A conexão com a nuvem caiu durante o envio. O que já foi enviado está salvo; o resto continua na fila.'; }
+            else { setCloud(ENGINE_STATES.ERROR, push.message); result.message = push.stopped === 'quota' ? 'A cota do Firebase foi excedida.' : `Credenciais recusadas: ${push.message}`; }
+            backoff(); return result;
+          }
+        }
+        if (only !== 'push') {
+          try { await pullAll(c, result, { manual }); }
+          catch (e) {
+            if (classifyError(e) !== 'network') throw e;
+            puller.stop();                                   // o próximo ciclo recria os listeners
+            setCloud(ENGINE_STATES.OFFLINE, e.message); result.offline = true; backoff();
+            result.message = 'A conexão com a nuvem caiu ao atualizar os dados. O envio já feito está salvo.'; return result;
+          }
         }
         st.attempts = 0; st.nextAttemptAt = 0;
         result.ok = result.errors.length === 0;
-        result.message = result.errors.length ? `${result.errors.length} item(ns) não puderam ser enviados — veja os erros abaixo.` : (result.pushed ? `${result.pushed} item(ns) enviado(s) à nuvem.` : 'Tudo já estava sincronizado.');
+        const p = result.pulled, pulledN = p ? p.created + p.updated + p.removed : 0;
+        const parts = [];
+        if (only !== 'pull') parts.push(result.pushed ? `${result.pushed} item(ns) enviado(s) à nuvem` : 'nada pendente para enviar');
+        if (only !== 'push' && p) parts.push(pulledN ? `${p.created} novo(s), ${p.updated} atualizado(s), ${p.removed} removido(s) vindo(s) da nuvem` : 'dados da nuvem já estavam atualizados');
+        if (p?.skippedDirty) parts.push(`${p.skippedDirty} alteração(ões) local(is) pendente(s) preservada(s)`);
+        result.message = result.errors.length ? `${result.errors.length} item(ns) não puderam ser enviados — veja os erros abaixo.` : parts.join('; ') + '.';
+        result.message = result.message.charAt(0).toUpperCase() + result.message.slice(1);
         if (result.ok) { st.lastSuccessAt = now(); store.setMeta('sync.lastSuccessAt', st.lastSuccessAt); }
         return result;
       } catch (e) {
@@ -124,7 +156,7 @@ export function createSyncEngine({ store, config, log, getCloud, now = () => Dat
         backoff(); return result;
       } finally {
         st.running = false; delete result._seen;
-        st.lastResult = { ok: result.ok, offline: result.offline, pushed: result.pushed, counts: result.counts, conflicts: result.conflicts, errors: result.errors.length, message: result.message, at: result.at };
+        st.lastResult = { ok: result.ok, offline: result.offline, pushed: result.pushed, pulled: result.pulled, counts: result.counts, conflicts: result.conflicts, errors: result.errors.length, message: result.message, at: result.at };
       }
     })().finally(() => { inflight = null; });
     return inflight;
@@ -147,8 +179,9 @@ export function createSyncEngine({ store, config, log, getCloud, now = () => Dat
 
   return {
     start() { stopped = false; resolveCloud().catch(() => {}); schedule(); },
-    stop() { stopped = true; clearTimeout(timer); },
-    syncNow: ({ manual = true } = {}) => cycle({ manual }),
+    stop() { stopped = true; clearTimeout(timer); puller.stop(); },
+    syncNow: ({ manual = true } = {}) => cycle({ manual }),              // envia E traz
+    pullNow: () => cycle({ manual: true, only: 'pull' }),               // "Atualizar dados da nuvem"
     tick: tickOnce,                                                    // para testes
     enabled, now,
     status() {
@@ -156,6 +189,7 @@ export function createSyncEngine({ store, config, log, getCloud, now = () => Dat
       return {
         enabled: enabled(), dataset: dataset(),
         cloud: { state: st.cloud, message: st.cloudMessage, lastProbeAt: st.lastProbeAt, lastOkAt: st.lastOkAt },
+        pull: puller.status(),
         push: { running: st.running, pending: dirty, lastAttemptAt: st.lastAttemptAt, lastSuccessAt: st.lastSuccessAt, nextAttemptAt: st.nextAttemptAt || null, attempts: st.attempts, lastResult: st.lastResult },
       };
     },

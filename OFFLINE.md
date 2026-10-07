@@ -142,7 +142,7 @@ Para pessoas não técnicas. Abre direto **no próprio PC**; de **outro aparelho
 - `GET /health` (público) traz um resumo (`sync.cloud`, `sync.pending`, `sync.lastSuccessAt`).
 
 ## Testes (Etapa 1)
-`cd local-server && npm test` — 85 testes. Envio: scan com Timestamps reais e idempotência; sem internet com backoff e
+`cd local-server && npm test` — 103 testes (85 da etapa 1 + recebimento, ranking e painel). Envio: scan com Timestamps reais e idempotência; sem internet com backoff e
 detecção automática da volta; **queda no meio do envio**; nuvem **pendurada** (o SQLite segue livre); **PC reiniciado**
 depois do commit na nuvem; **mesmo scan por dois caminhos** (nas duas ordens); conflito de unidade+prova (local mais
 antigo / mais novo / aprovação manual / perdedor local); revisão mais recente; merge de 3 vias; disciplina; item
@@ -152,3 +152,47 @@ Tudo contra um **Firestore falso em memória** (`test/fake-firestore.js`): nada 
 
 > ⚠️ **Não testado contra o Firestore real** (não há emulador aqui e não escrevo na sua produção). Faça um teste curto
 > antes do evento — roteiro no GUIA-WINDOWS.md.
+
+
+## Nuvem → local (etapa 2)
+
+Mantém o SQLite do PC atualizado com o que acontece na nuvem: **regiões, unidades, participantes, requisitos (com as
+variantes de QR), usuários (para o login), disciplina e submissões** (inclusive o que for criado ou aprovado na nuvem
+durante o evento). A auditoria (`auditLog`) só sobe, não desce.
+
+- **Carga inicial e atualização incremental com os *listeners* do Firestore** (`local-server/src/sync/pull.js`): na carga
+  vem tudo; depois só chegam as **mudanças** (poucas leituras na cota do Firebase) e as **exclusões** são percebidas.
+  Os listeners só ligam quando a nuvem responde; se caírem (erro) ou a internet sumir por muito tempo, são **recriados no
+  próximo ciclo** (≤ 1 min depois de a nuvem voltar).
+- **Reconciliação:** leitura completa de todas as coleções que corrige qualquer coisa que um listener tenha perdido —
+  acontece no botão **"Atualizar dados da nuvem"**, em **"Sincronizar agora"** e a cada **2 h** em segundo plano.
+- **Regra de ouro — nunca sobrescrever o que o local alterou e ainda não enviou:** uma linha com alteração pendente
+  (`dirty`) é **ignorada** pelo recebimento; o envio resolve o conflito (merge de 3 vias / revisão mais recente / scan mais
+  antigo, ver tabela acima). Linhas só-locais (sem base na nuvem) nunca são removidas por uma reconciliação.
+- **Exclusão feita na nuvem** é aplicada localmente (inclusive a que aconteceu com o PC desligado), exceto se a linha
+  tiver alteração pendente.
+- **Convergência dos scans:** se a nuvem substituir um scan do PC por outro mais antigo, o listener traz a substituição e a
+  pontuação local passa a ser a da nuvem (testado).
+- **Login:** usuários vêm da nuvem (inclusive o que for criado, alterado ou desativado lá durante o evento).
+- **Desempenho:** carga inicial de ~6 mil documentos em poucos segundos (testado).
+- **Sem internet / nuvem pendurada:** "Atualizar" responde com a explicação, nada local muda, e nenhuma rota do servidor
+  espera por isso. Se a carga for interrompida (ex.: PC reiniciado), recomeçar é idempotente.
+
+## Ranking (etapa 2)
+
+O ranking **anônimo** (tela de login e portais) e o **identificado** (admin) são lidos do **servidor local quando o aparelho
+está nele** (`GET /ranking?meta=1`, `GET /scores/units?meta=1`) e da **nuvem** (cálculo ao vivo pelo Firestore) caso
+contrário (`js/ranking.js`). Sem nenhuma rede, mostra a **última cópia guardada** no aparelho. Sempre aparece a **hora da
+atualização** e a fonte: *"Atualizado às 14:32 · servidor local (nuvem sincronizada às 14:30)"* / *"· nuvem"* / *"· sem
+conexão — último ranking guardado neste aparelho"*. O portal do Conselheiro mostra a hora do último download do servidor
+ativo. Como o ranking local é calculado sobre dados sincronizados com a nuvem, a hora de sincronização mostra quão fresco ele é.
+
+### Testes (etapa 2)
+Recebimento (`test/sync-pull.test.js`): **carga inicial** (banco vazio → tudo, sem pendências, origem marcada); **incremental**
+(aprovação, variante de QR nova, realocação, exclusão, região/disciplina novas; eco sem mudança não escreve);
+**regra de ouro** (pendência local nunca pisada); **exclusão com o PC desligado**; **reconciliação** que acha o que o
+listener perdeu; **sem internet** e listener que cai e é refeito; **nuvem pendurada**; **PC reiniciado no meio da
+carga**; scan do PC **substituído na nuvem** converge; **login** de usuário criado/desativado na nuvem durante o evento;
+**desempenho** (~6 mil documentos). Ranking (`test/ranking.test.js`): servidor local com `?meta=1`, app no local / na
+nuvem / sem rede (cópia guardada) / prazo, ranking identificado com token. Painel: botão "Atualizar dados da nuvem".
+Rodar `npm test` em máquina muito carregada pode estourar prazos de relógio; os testes conferem comportamento, não tempo.

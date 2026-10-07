@@ -65,6 +65,7 @@
 
   <section class="nums">
     <div class="card num"><b id="nLast">—</b><span id="nLastSub">Última sincronização com sucesso</span></div>
+    <div class="card num"><b id="nPull">—</b><span id="nPullSub">Última atualização vinda da nuvem</span></div>
     <div class="card num"><b id="nPending">0</b><span>Itens aguardando envio</span></div>
     <div class="card num"><b id="nErrors">0</b><span>Itens com erro</span></div>
   </section>
@@ -72,7 +73,8 @@
   <section class="card">
     <div class="toolbar">
       <button id="btnSync">🔄 Sincronizar agora</button>
-      <span class="small" id="syncHint">Envia o que está pendente para a nuvem.</span>
+      <button id="btnPull" class="alt">⬇️ Atualizar dados da nuvem</button>
+      <span class="small" id="syncHint">Envia o que está pendente e traz as novidades da nuvem.</span>
     </div>
     <div class="msg" id="syncMsg" style="margin-top:14px"></div>
   </section>
@@ -121,10 +123,13 @@
     var s = d.sync;
     $('nLast').textContent = s.lastSuccessAt ? new Date(s.lastSuccessAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : 'ainda não';
     $('nLastSub').textContent = s.lastSuccessAt ? 'Última sincronização com sucesso (' + ago(s.lastSuccessAt) + ')' : 'Nenhuma sincronização concluída ainda';
+    var pl = d.pull;
+    $('nPull').textContent = pl && pl.lastPullAt ? new Date(pl.lastPullAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : 'ainda não';
+    $('nPullSub').textContent = pl && pl.error ? 'Atualização automática interrompida: ' + pl.error : pl && pl.lastPullAt ? 'Última atualização vinda da nuvem (' + ago(pl.lastPullAt) + ')' + (pl.listening ? ' · acompanhando em tempo real' : '') : 'Nenhuma atualização vinda da nuvem ainda';
     $('nPending').textContent = s.pending; $('nErrors').textContent = d.errors.failing.length;
     $('nErrors').style.color = d.errors.failing.length ? 'var(--red)' : ''; $('nPending').style.color = s.pending ? '#b45309' : '';
-    $('btnSync').disabled = !!s.running; $('btnSync').textContent = s.running ? '⏳ Sincronizando…' : '🔄 Sincronizar agora';
-    $('syncHint').textContent = s.enabled ? (s.nextAttemptAt && s.nextAttemptAt > nowS() ? 'Nova tentativa automática em ' + Math.max(1, Math.round((s.nextAttemptAt - nowS()) / 1000)) + ' s.' : 'Envia o que está pendente para a nuvem.') : 'A sincronização está desligada neste servidor.';
+    $('btnSync').disabled = !!s.running; $('btnPull').disabled = !!s.running; $('btnSync').textContent = s.running ? '⏳ Sincronizando…' : '🔄 Sincronizar agora';
+    $('syncHint').textContent = s.enabled ? (s.nextAttemptAt && s.nextAttemptAt > nowS() ? 'Nova tentativa automática em ' + Math.max(1, Math.round((s.nextAttemptAt - nowS()) / 1000)) + ' s.' : 'Envia o que está pendente e traz as novidades da nuvem.') : 'A sincronização está desligada neste servidor.';
 
     $('alertsCard').style.display = d.alerts.length ? 'block' : 'none';
     $('alertsList').innerHTML = d.alerts.map(function (a) { return '<li>' + esc(a.message) + ' <span class="small">(' + fmt(a.ts) + ')</span></li>'; }).join('');
@@ -145,18 +150,20 @@
     }).catch(function () { if (++failures >= 2) $('down').style.display = 'block'; });
   }
 
-  $('btnSync').onclick = function () {
-    var btn = $('btnSync'), box = $('syncMsg'); btn.disabled = true; btn.textContent = '⏳ Sincronizando…'; box.className = 'msg';
-    api('sync-now', { method: 'POST', body: '{}' }).then(function (r) {
+  function runSync(path, btn, busyText, idleText) {
+    var box = $('syncMsg'); $('btnSync').disabled = true; $('btnPull').disabled = true; btn.textContent = busyText; box.className = 'msg';
+    api(path, { method: 'POST', body: '{}' }).then(function (r) {
       var b = r.body;
       if (r.status !== 200) { box.className = 'msg err'; box.textContent = '❌ Não foi possível sincronizar: ' + (b.error || 'erro ' + r.status); }
       else if (b.offline) { box.className = 'msg warn'; box.textContent = '📡 ' + b.message; }
-      else if (!b.ok) { box.className = 'msg err'; box.textContent = '❌ ' + b.message + (b.errors && b.errors[0] ? ' Motivo: ' + b.errors[0].message : ''); }
-      else { box.className = 'msg ok'; box.textContent = '✅ Sincronizado com sucesso. ' + b.message; }
+      else if (!b.ok) { box.className = 'msg err'; box.textContent = '❌ ' + b.message + (b.errors && b.errors[0] && b.errors[0].message ? ' Motivo: ' + b.errors[0].message : ''); }
+      else { box.className = 'msg ok'; box.textContent = '✅ ' + b.message; }
       if (b.alerts && b.alerts.length) box.textContent += ' ⚠️ Atenção: ' + b.alerts.length + ' aviso(s) sobre pontos que já estavam cadastrados (veja abaixo).';
       if (b.summary) render(b.summary); else load();
-    }).catch(function () { box.className = 'msg err'; box.textContent = '❌ Não consegui falar com o servidor.'; }).then(function () { btn.disabled = false; });
-  };
+    }).catch(function () { box.className = 'msg err'; box.textContent = '❌ Não consegui falar com o servidor.'; }).then(function () { btn.textContent = idleText; $('btnSync').disabled = false; $('btnPull').disabled = false; });
+  }
+  $('btnSync').onclick = function () { runSync('sync-now', $('btnSync'), '⏳ Sincronizando…', '🔄 Sincronizar agora'); };
+  $('btnPull').onclick = function () { runSync('pull-now', $('btnPull'), '⏳ Atualizando…', '⬇️ Atualizar dados da nuvem'); };
   $('btnAck').onclick = function () { api('ack', { method: 'POST', body: '{}' }).then(load); };
   $('pinOk').onclick = function () { pin = $('pinInput').value; try { sessionStorage.setItem('statusPin', pin); } catch (e) {} load(); };
   $('pinInput').onkeydown = function (e) { if (e.key === 'Enter') $('pinOk').click(); };

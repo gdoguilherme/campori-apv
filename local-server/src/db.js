@@ -21,6 +21,9 @@ export const INDEXED = {
 };
 export const COLLECTIONS = Object.keys(INDEXED);
 
+// JSON canônico (chaves ordenadas): compara documentos sem depender da ordem dos campos
+export const canon = v => JSON.stringify(v, (_k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map(k => [k, x[k]])) : x));
+
 export const nowTs = () => { const ms = Date.now(); return { seconds: Math.floor(ms / 1000), nanoseconds: (ms % 1000) * 1e6 }; };
 
 // Sentinelas que o client pode mandar no corpo: serverTimestamp e remoção de campo
@@ -228,16 +231,32 @@ export class Store {
     this.db.prepare(`UPDATE "${col}" SET syncError = ?, syncAttempts = syncAttempts + 1, syncTriedAt = ? WHERE id = ?`).run(String(message).slice(0, 500), Date.now(), String(id));
   }
 
-  // Linha que a nuvem alterou/criou (nunca sobrescreve alteração local ainda não enviada).
+  // Linha que a nuvem alterou/criou. NUNCA sobrescreve alteração local ainda não enviada (dirty) — o envio
+  // resolve esse conflito pelas regras de OFFLINE.md. Devolve: created | updated | unchanged | skipped-dirty.
   applyRemote(col, id, doc) {
     this._check(col);
     return this.tx(() => {
-      const row = this.db.prepare(`SELECT dirty, createdAt FROM "${col}" WHERE id = ?`).get(String(id));
+      const row = this.db.prepare(`SELECT dirty, createdAt, data, baseData, deleted FROM "${col}" WHERE id = ?`).get(String(id));
       if (row?.dirty === 1) return 'skipped-dirty';
       const { id: _i, ...clean } = doc;
+      const c = canon(clean);
+      if (row && !row.deleted && row.baseData && canon(JSON.parse(row.data)) === c && canon(JSON.parse(row.baseData)) === c) return 'unchanged';  // eco da nossa própria gravação, etc.
       this._write(col, String(id), clean, row?.createdAt ?? Date.now(), { dirty: 0, base: clean });
       this._bump();
       return row ? 'updated' : 'created';
+    });
+  }
+
+  // Após ler a coleção INTEIRA da nuvem: remove o que a nuvem não tem mais — só linhas que este PC conhecia da
+  // nuvem (têm base) e não têm alteração pendente. Linhas só-locais (sem base) e pendentes nunca são removidas.
+  sweepMissing(col, presentIds) {
+    this._check(col);
+    const present = new Set(presentIds.map(String));
+    return this.tx(() => {
+      const gone = this.db.prepare(`SELECT id FROM "${col}" WHERE dirty = 0 AND baseData IS NOT NULL`).all().map(r => r.id).filter(id => !present.has(id));
+      for (const id of gone) this.db.prepare(`DELETE FROM "${col}" WHERE id = ?`).run(id);
+      if (gone.length) this._bump();
+      return gone.length;
     });
   }
 

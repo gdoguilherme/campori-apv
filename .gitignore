@@ -33,3 +33,12 @@ local-server/logs/
 local-server/backups/
 local-server/.env
 !local-server/.env.example
+
+# HTTPS / certificados do servidor local — NUNCA versionar (chave privada!)
+local-server/certs/
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.cer

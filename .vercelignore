@@ -1,3 +1,9 @@
 assets/originais
 local-server
 PWA.md
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+certs

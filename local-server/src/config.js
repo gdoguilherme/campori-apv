@@ -39,8 +39,23 @@ export function loadConfig(overrides = {}) {
     jwtSecret = fs.readFileSync(f, 'utf8').trim();
   }
 
+  // Caminhos relativos no .env valem a partir da pasta local-server (ex: certs/arquivo.pem)
+  const resolveFile = p => (p ? (path.isAbsolute(p) ? p : path.resolve(ROOT, p)) : null);
+
   return {
     port: Number(overrides.port ?? env.PORT ?? 8787),
+    // HTTPS (certificado Let's Encrypt emitido com win-acme — ver GUIA-WINDOWS.md). Sem os dois
+    // arquivos o servidor cai para HTTP (com aviso no log). Porta 443 = URL sem ":porta".
+    httpsCertPath: resolveFile(overrides.httpsCertPath ?? env.HTTPS_CERT_PATH),
+    httpsKeyPath: resolveFile(overrides.httpsKeyPath ?? env.HTTPS_KEY_PATH),
+    httpsPort: Number(overrides.httpsPort ?? env.HTTPS_PORT ?? 443),
+    // Origens (páginas) autorizadas a chamar a API pelo navegador. O app instalado vem do site
+    // de produção (https) e fala com este servidor — por isso essa origem precisa estar aqui.
+    corsOrigins: [
+      'https://campori.gdtmidia.com.br',
+      'https://local.gdtmidia.com.br',
+      ...String(overrides.corsOrigins ?? env.CORS_ORIGINS ?? '').split(',').map(s => s.trim()).filter(Boolean),
+    ],
     dbPath: overrides.dbPath || path.join(dataDir, 'campori-local.db'),
     uploadDir: overrides.uploadDir || path.join(dataDir, 'uploads'),
     backupDir: overrides.backupDir || path.join(ROOT, 'backups'),

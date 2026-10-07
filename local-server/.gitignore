@@ -1,0 +1,22 @@
+# ── NUNCA versionar: certificados, chaves privadas e segredos ──────────────
+certs/
+*.pem
+*.key
+*.crt
+*.cer
+*.pfx
+*.p12
+*.csr
+.env
+.env.*
+!.env.example
+
+# ── dados do evento, logs e backups (contêm dados pessoais) ────────────────
+data/
+logs/
+backups/
+node_modules/
+
+# CLI do Vercel / macOS
+.vercel
+.DS_Store

@@ -11,19 +11,34 @@ import { uploadRouter } from './routes/upload.js';
 import { syncRouter } from './routes/sync.js';
 import { COLLECTIONS } from './db.js';
 
-export function createApp({ store, config, log }) {
+export function createApp({ store, config, log, tls = () => null }) {
   const auth = createAuth({ store, config });
   const ctx = { store, config, log, auth };
   const app = express();
   app.disable('x-powered-by');
 
-  // (antes do cors(): ele encerra a resposta do preflight OPTIONS)
-  // Chrome exige este cabeçalho quando um site público (https) chama um servidor de rede privada
+  // CORS: só as páginas do Campori (produção + este servidor) e localhost (desenvolvimento) podem
+  // chamar a API a partir do navegador. Sem cabeçalho Origin (curl, mesmo site) passa; origem
+  // desconhecida simplesmente não recebe os cabeçalhos CORS (o navegador bloqueia a leitura).
+  const allowedOrigin = origin =>
+    config.corsOrigins.includes(origin) || /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin);
+
+  // Private Network Access: o Chrome faz um preflight extra quando um site público (https) chama um
+  // servidor de rede privada (192.168.x.x) e só segue se a resposta trouxer este cabeçalho.
+  // Vem ANTES do cors(), que encerra a resposta do preflight.
   app.use((req, res, next) => {
-    if (req.headers['access-control-request-private-network']) res.set('Access-Control-Allow-Private-Network', 'true');
+    if (req.method === 'OPTIONS' && req.headers['access-control-request-private-network'] === 'true' &&
+        allowedOrigin(req.headers.origin || '')) {
+      res.set('Access-Control-Allow-Private-Network', 'true');
+    }
     next();
   });
-  app.use(cors()); // rede local do evento; a autorização é por token Bearer
+  app.use(cors({
+    origin: (origin, cb) => cb(null, !origin || allowedOrigin(origin) ? (origin || true) : false),
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    maxAge: 600,
+  }));
   app.use(express.json({ limit: '2mb' }));
 
   app.get('/health', (_req, res) => {
@@ -33,9 +48,11 @@ export function createApp({ store, config, log }) {
       revision: store.revision(),
       counts: Object.fromEntries(COLLECTIONS.map(c => [c, store.count(c)])),
       qrSecretConfigured: !config.qrSecretIsDev,
+      https: tls(),   // { enabled, port, validTo, daysLeft, error } — para conferir do celular
     });
   });
 
+  // /health: público (sem autenticação), leve — serve ao watchdog, ao app (teste de servidor) e para você abrir no celular
   // API — mesmos caminhos do backend da nuvem (/users, /qr, /upload) + dados e regras locais
   app.use('/users', usersRouter(ctx));
   app.use('/qr', qrRouter(ctx));

@@ -196,3 +196,20 @@ carga**; scan do PC **substituído na nuvem** converge; **login** de usuário cr
 **desempenho** (~6 mil documentos). Ranking (`test/ranking.test.js`): servidor local com `?meta=1`, app no local / na
 nuvem / sem rede (cópia guardada) / prazo, ranking identificado com token. Painel: botão "Atualizar dados da nuvem".
 Rodar `npm test` em máquina muito carregada pode estourar prazos de relógio; os testes conferem comportamento, não tempo.
+
+
+---
+
+# Acesso sem instalação prévia (modo local — etapa 2)
+
+Quando o app é aberto **pelo servidor local** (`https://local.gdtmidia.com.br` ou `http://localhost:8787`):
+- **A raiz `/` abre o app** (redireciona para o login) — basta digitar o endereço ou ler o QR da página de ajuda.
+- **Sem depender de internet para carregar:** Tailwind, xlsx, qrcodejs e html5-qrcode são servidos de `/vendor` (cópias em
+  `local-server/vendor/`); o injetor (`src/html-inject.js`) reescreve os `<script src="https://…">` **apenas nas páginas servidas
+  pelo servidor local**. Os arquivos do repositório — e portanto a nuvem/Vercel — **não mudam**.
+- **PWA instalável a partir da origem local** (manifest + service worker + ícones; o `sw.js` guarda `/vendor` e `/ajuda` em cache
+  **só nessa origem** — na nuvem nenhuma requisição nova).
+- **`/ajuda`**: página curta e pública (funciona offline) com Wi-Fi do evento (`HELP_WIFI_NAME`, opcionalmente
+  `HELP_WIFI_PASSWORD`), endereço + **QR Code**, como instalar no Android e no iPhone e "não abriu?". A tela de login ganha um
+  botãozinho "ℹ️ Ajuda".
+- Testes: `test/local-access.test.js` (raiz, nenhuma página com CDN externo, bibliotecas, ajuda, PWA, original intacto).

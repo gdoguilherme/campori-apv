@@ -4,7 +4,7 @@
 // A lista e a VERSION são geradas por `node scripts/build-sw.mjs` (rodar antes de cada deploy).
 
 /* BUILD:START */
-const VERSION = 'fe435e33b6';
+const VERSION = '3ecde99c22';
 const SHELL = [
   "/assets/favicon/favicon-16.png",
   "/assets/favicon/favicon-180.png",
@@ -55,6 +55,11 @@ const EXTERNAL = [
 ];
 const SWR_EXTERNAL = new Set(['https://cdn.tailwindcss.com/']);
 
+// Origem do SERVIDOR LOCAL do evento (https://local.gdtmidia.com.br ou http://localhost:8787): lá as bibliotecas de CDN
+// são servidas de /vendor e a página /ajuda existe. Na nuvem (Vercel) nada disto é requisitado.
+const IS_LOCAL_ORIGIN = self.location.hostname === 'local.gdtmidia.com.br' || self.location.port === '8787';
+const LOCAL_ONLY = ['/vendor/tailwindcss-3.4.17.js', '/vendor/xlsx.full.min.js', '/vendor/qrcode.min.js', '/vendor/html5-qrcode.min.js', '/ajuda'];
+
 const CACHE = `campori-shell-${VERSION}`;
 
 // fetch com prazo: o SW também não pode ficar pendurado em rede ruim (Starlink caindo)
@@ -92,6 +97,12 @@ self.addEventListener('install', event => {
         if (res.ok || res.type === 'opaque') await cache.put(url, res);
       } catch { /* sem rede agora; tenta de novo no próximo update do SW */ }
     }));
+    // Só no servidor local: bibliotecas (/vendor) e ajuda também ficam em cache para abrir sem rede
+    if (IS_LOCAL_ORIGIN) {
+      await Promise.all(LOCAL_ONLY.map(async url => {
+        try { const res = await timed(url, { cache: 'reload' }, 30000); if (res.ok) await cache.put(url, await plain(res)); } catch { /* tenta de novo em runtime */ }
+      }));
+    }
     await self.skipWaiting();
   })());
 });
@@ -156,8 +167,8 @@ self.addEventListener('fetch', event => {
 
   if (url.origin === self.location.origin) {
     const navigate = req.mode === 'navigate';
-    const isShell = SHELL_SET.has(url.pathname);
-    const isPage = navigate && (url.pathname.startsWith('/pages/') || url.pathname === '/' || url.pathname === '/index.html');
+    const isShell = SHELL_SET.has(url.pathname) || (IS_LOCAL_ORIGIN && url.pathname.startsWith('/vendor/'));
+    const isPage = navigate && (url.pathname.startsWith('/pages/') || url.pathname === '/' || url.pathname === '/index.html' || (IS_LOCAL_ORIGIN && url.pathname === '/ajuda'));
     if (isShell || isPage) return event.respondWith(staleWhileRevalidate(event, { navigate }));
     return; // API, /files, /health, uploads… nunca interceptados
   }

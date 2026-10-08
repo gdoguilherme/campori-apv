@@ -136,7 +136,7 @@ export function evaluateOfflineScan({ selectedRequirementId, payload, requiremen
 // ── Snapshot que o celular guarda para funcionar offline ──────────────────────
 const pick = (o, keys) => Object.fromEntries(keys.filter(k => o[k] !== undefined).map(k => [k, o[k]]));
 
-export function buildCounselorBootstrap({ user, unit, region, regions, participants, requirements, unitSubmissions, allSubmissions, allUnits, disciplinaryActions, nowMs }) {
+export function buildCounselorBootstrap({ user, unit, region, regions, participants, requirements, unitSubmissions, regionSubmissions, allSubmissions, allUnits, disciplinaryActions, nowMs }) {
   const reqs = (requirements || [])
     .filter(r => r.active !== false && reqFilledBy(r) === 'conselheiro')
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
@@ -145,13 +145,31 @@ export function buildCounselorBootstrap({ user, unit, region, regions, participa
       // só id/rótulo/pontos — o hash NUNCA vai para o celular
       qrVariants: (r.qrVariants || []).map(v => pick(v, ['id', 'label', 'points'])),
     }));
+  // Pontos da REGIÃO (valem para todas as unidades dela): requisitos que não são do Conselheiro (Regional e "Só Fiscal"),
+  // da modalidade da região — a mesma regra do portal regional — e as submissões no nível da região (sem unitId).
+  const cat = region?.competitionCategory || null;
+  const REQ_FIELDS = ['id', 'name', 'description', 'points', 'category', 'areaAtuacao', 'code', 'deadline', 'order', 'filledBy', 'competitionCategory', 'active'];
+  const regionReqs = (requirements || [])
+    .filter(r => r.active !== false && reqFilledBy(r) !== 'conselheiro' &&
+      (!cat || !r.competitionCategory || r.competitionCategory === 'Ambos' || r.competitionCategory === cat))
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .map(r => ({ ...pick(r, REQ_FIELDS), filledBy: reqFilledBy(r) }));
+  const regionId = unit?.regionId || region?.id || null;
+  const regionSubs = (regionSubmissions || []).filter(s => !s.unitId && s.regionId === regionId)
+    .map(s => pick(s, ['id', 'requirementId', 'status', 'requirementPoints', 'submittedAt', 'reviewedAt', 'rejectionReason', 'source', 'fiscalSuggestion', 'regionId']));
+  // descontos de disciplina que atingem esta unidade (a dela ou a da região inteira); sem o motivo
+  const discipline = (disciplinaryActions || [])
+    .filter(d => (d.targetType === 'unit' && d.targetId === unit?.id) || (d.targetType === 'region' && d.targetId === regionId))
+    .map(d => pick(d, ['id', 'targetType', 'targetId', 'points', 'createdAt']));
+
   return {
     serverTime: nowMs,
     unit: unit ? pick(unit, ['id', 'name', 'warCry', 'regionId']) : null,
-    region: region ? pick(region, ['id', 'name']) : null,
+    region: region ? pick(region, ['id', 'name', 'competitionCategory']) : null,
     regions: (regions || (region ? [region] : [])).map(r => pick(r, ['id', 'name'])), // nomes p/ "clube amigo" de outras regiões
     participants: (participants || []).map(p => pick(p, ['id', 'name', 'club', 'regionId', 'competitionCategory', 'unitId'])),
     requirements: reqs,
+    regionRequirements: regionReqs, regionSubmissions: regionSubs, disciplinaryActions: discipline,
     submissions: (unitSubmissions || []).map(s => pick(s, ['id', 'requirementId', 'status', 'requirementPoints', 'submittedAt', 'rejectionReason', 'source', 'qrVariantLabel', 'unitId', 'qrConflict'])),
     // ranking anônimo (só pontos) — mesmo que o login/portais já exibem
     ranking: allSubmissions && allUnits

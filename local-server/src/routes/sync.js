@@ -55,9 +55,11 @@ export function syncRouter({ store, auth }) {
       participants: user.unitId ? store.list('participants', { filters: { unitId: user.unitId } }) : [],
       requirements: store.list('requirements'),
       unitSubmissions: user.unitId ? store.list('submissions', { filters: { unitId: user.unitId } }) : [],
+      // pontos da região (sem unitId) — valem para todas as unidades dela
+      regionSubmissions: unit?.regionId ? store.list('submissions', { filters: { regionId: unit.regionId, unitId: null } }) : [],
       allSubmissions: withRanking ? store.list('submissions') : null,
       allUnits: withRanking ? store.list('units') : null,
-      disciplinaryActions: withRanking ? store.list('disciplinaryActions') : [],
+      disciplinaryActions: store.list('disciplinaryActions'),   // o construtor filtra as que atingem esta unidade/região
       nowMs: Date.now(),
     }));
   });

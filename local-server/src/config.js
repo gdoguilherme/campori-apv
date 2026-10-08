@@ -51,6 +51,12 @@ export function loadConfig(overrides = {}) {
     httpsPort: Number(overrides.httpsPort ?? env.HTTPS_PORT ?? 443),
     // Origens (páginas) autorizadas a chamar a API pelo navegador. O app instalado vem do site
     // de produção (https) e fala com este servidor — por isso essa origem precisa estar aqui.
+    // Sincronização com o Firebase: DESLIGADA por padrão (evita que um banco de teste/desenvolvimento grave na
+    // nuvem de produção por engano). No PC do evento: CLOUD_SYNC=1 no .env.
+    cloudSync: overrides.cloudSync ?? env.CLOUD_SYNC === '1',
+    syncTickMs: Number(overrides.syncTickMs ?? env.SYNC_TICK_MS ?? 10_000),
+    // PIN do painel /status quando aberto de OUTRO aparelho (no próprio PC não pede)
+    statusPin: String(overrides.statusPin ?? env.STATUS_PIN ?? ''),
     corsOrigins: [
       'https://campori.gdtmidia.com.br',
       'https://local.gdtmidia.com.br',

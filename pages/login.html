@@ -29,6 +29,7 @@
 import { guardLogin, saveSession, portalUrlForUser } from '../js/auth.js';
 import { loginUser, ensureInitialAdmin, toast, fetchPublicRanking, renderAnonRanking } from '../js/api.js';
 import { withTimeout } from '../js/net.js';
+import { loadAnonRanking, rankingStampHtml } from '../js/ranking.js';
 
 const app = document.getElementById('app');
 let loading = false;
@@ -53,8 +54,9 @@ async function init() {
     console.warn('Erro ao verificar usuários:', e);
   }
   try {
-    const scores = await withTimeout(fetchPublicRanking(), 12000, 'Tempo esgotado ao carregar o ranking');
-    rankingHtml = renderAnonRanking(scores);
+    // servidor local quando o aparelho está na rede do evento; nuvem (Firestore) caso contrário; cópia guardada sem rede
+    const info = await loadAnonRanking({ fallback: fetchPublicRanking });
+    rankingHtml = renderAnonRanking(info.rows) + rankingStampHtml(info);
   } catch (e) {
     console.warn('Erro ao carregar ranking público:', e);
   }

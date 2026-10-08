@@ -12,6 +12,7 @@ import {
   subDisciplinaryActions, createDisciplinaryAction, deleteDisciplinaryAction as apiDeleteDiscipline,
   CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS, AREAS_ATUACAO, FILLED_BY
 } from './api.js';
+import { loadIdentifiedRanking, rankingStampHtml } from './ranking.js';
 
 // ── ESTADO ────────────────────────────────────────────────────
 const S = {
@@ -28,6 +29,7 @@ const S = {
   importRows: [], importErrors: [],
   photoUrl: null, modal: null,
   loading: false,
+  rankInfo: null,
 };
 
 let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null, _unsubParticipants = null, _unsubUnits = null, _unsubDiscipline = null;
@@ -52,6 +54,14 @@ export function init() {
 
   refreshUsers();
   render();
+  setInterval(() => { if (S.adminTab === 'ranking') refreshRanking(); }, 30_000);   // só enquanto a aba Ranking está aberta
+}
+
+// Ranking identificado: do servidor LOCAL quando o aparelho está na rede do evento; senão, cálculo ao vivo da nuvem
+function refreshRanking() {
+  loadIdentifiedRanking({ token: getToken(), fallback: async () => computeUnitScores(S.submissions, S.units, S.disciplinaryActions) })
+    .then(info => { S.rankInfo = info; if (S.adminTab === 'ranking' && !S.modal) render(); })
+    .catch(() => {});
 }
 
 // A coleção `users` não é mais lida em tempo real (ver firestore.rules) — o painel
@@ -472,12 +482,16 @@ function tDashboard() {
 // ── TAB: RANKING ──────────────────────────────────────────────
 // Ranking único por unidade — sem separação DBV/AVT, já que as unidades são mistas.
 function tRanking() {
-  const scores = computeUnitScores(S.submissions, S.units, S.disciplinaryActions);
+  // fonte nuvem = cálculo ao vivo (listeners do Firestore); fonte local / cópia guardada = o que o servidor devolveu
+  const live = !S.rankInfo || S.rankInfo.source === 'cloud';
+  const scores = live ? computeUnitScores(S.submissions, S.units, S.disciplinaryActions) : S.rankInfo.rows;
+  const stamp  = rankingStampHtml(live ? { updatedAt: Date.now(), source: 'cloud' } : S.rankInfo);
   const max    = scores[0]?.total || 1;
   const top3   = scores.filter(s => s.total > 0).slice(0, 3);
 
   return `
   <div>
+    ${stamp}
     ${top3.length >= 3 ? `
     <div style="display:flex;align-items:flex-end;gap:.75rem;margin-bottom:1.25rem;">
       <div style="flex:1;text-align:center;">
@@ -1365,7 +1379,7 @@ window.W = {
     authLogout();
   },
 
-  setTab(tab)      { S.adminTab = tab; S.sidebarOpen = false; render(); },
+  setTab(tab)      { S.adminTab = tab; S.sidebarOpen = false; render(); if (tab === 'ranking') refreshRanking(); },
   toggleSidebar(open) { S.sidebarOpen = open; render(); },
   closeModal()     { S.modal = null; render(); },
   closeCredentials() { S.modal = null; S.createdCreds = null; render(); },

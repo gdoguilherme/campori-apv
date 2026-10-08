@@ -154,6 +154,56 @@ Se a porta 443 já estiver ocupada (IIS, Skype, VMware…), o log avisa; descubr
 
 ---
 
+## PARTE 1C — Sincronização com a nuvem (Firebase) e painel de status
+
+O servidor local manda para a nuvem, sozinho e em segundo plano, tudo o que acontece em campo (scans de QR, avaliações do
+fiscal, disciplina, aprovações). **Se a Starlink cair nada para**: o servidor continua funcionando e envia tudo quando a
+internet voltar. Quem vence quando os dois lados mexem na mesma coisa está no `OFFLINE.md` (resumo: scan mais antigo vence;
+revisão mais recente vence; nos cadastros vale a nuvem).
+
+### 15. Ligar a sincronização
+1. O arquivo de credenciais do Firebase (`campori-apv-firebase-adminsdk.json`) tem que estar em `C:\campori\server\`
+   (é o mesmo do passo 4). **É uma chave de administrador: fica só neste PC, nunca vai para e-mail/WhatsApp/git.**
+2. No `.env`, troque `CLOUD_SYNC=0` por **`CLOUD_SYNC=1`**. Defina também um **`STATUS_PIN`** (4 a 8 números) se quiser abrir o
+   painel de outro aparelho.
+3. Reinicie o servidor (feche a janela preta e abra `INICIAR.bat`). A janela mostra:
+   `Painel (PC): http://localhost:8787/status   (sincronização com a nuvem LIGADA)`.
+> O banco de **demonstração** (`npm run demo`) **nunca** sincroniza — de propósito.
+
+### 16. O painel de status — `http://localhost:8787/status`
+Abra no navegador **do PC** (ou fixe nos favoritos). Em outro aparelho, use o endereço do PC e digite o PIN.
+
+| Cor grande | O que significa | O que fazer |
+|---|---|---|
+| 🟢 **Tudo certo** | Servidor rodando, nuvem conectada, tudo enviado. | Nada. |
+| 🟡 **Sem internet — N itens aguardando envio** | A Starlink está fora. **Está tudo seguro neste PC.** | Nada: envia sozinho quando voltar (ou clique em **Sincronizar agora**). |
+| 🟡 **N itens aguardando envio** | Internet ok; o envio está acontecendo. | Aguarde alguns segundos. |
+| 🔴 **Atenção: há erros** | Algum item não pôde ser enviado (o motivo aparece na lista). | Clique em **Sincronizar agora**; se persistir, chame o responsável técnico com o texto do erro. |
+| ⚪ **Funcionando só neste PC** | A sincronização está desligada ou sem credenciais. | Confira o passo 15. |
+
+- **Última sincronização** e **itens aguardando envio** ficam sempre visíveis. Mais embaixo: cada **unidade** e cada
+  **requisito** com ✅ Sincronizado / 🕓 Pendente / ❌ Erro.
+- **🔄 Sincronizar agora:** **envia** o que está pendente **e traz** as novidades da nuvem. Responde com ✅ (deu certo, com o
+  resumo), 📡 (sem acesso à nuvem — explica) ou ❌ (erro **com o motivo**).
+- **⬇️ Atualizar dados da nuvem:** só traz (cadastros, requisitos, usuários, aprovações feitas na nuvem...). Os dados da
+  nuvem também chegam **sozinhos** enquanto houver internet; o botão força uma conferência completa.
+- **"Última atualização vinda da nuvem"** mostra a hora e se está acompanhando em tempo real. Alteração feita neste PC e
+  ainda não enviada **nunca é apagada** por uma atualização da nuvem.
+- **⚠️ "Pontos que já estavam cadastrados":** aparece em amarelo quando a sincronização acha uma pontuação repetida (ex.: a
+  unidade já tinha pontuado aquela prova na nuvem). **Avise a organização** e depois clique em "Entendi — limpar avisos".
+- Se o painel mostrar a faixa vermelha **"Não consigo falar com o servidor"**, a janela preta fechou: abra `INICIAR.bat`.
+
+### 17. Teste com a nuvem de verdade (faça antes do evento, com internet)
+Até aqui foi testado com uma nuvem simulada; este roteiro confirma credenciais e regras do Firebase reais:
+1. Com `CLOUD_SYNC=1` e o banco recém-importado (`npm run pull-cloud -- --yes`), abra o painel: a luz **Nuvem** deve ficar 🟢
+   em até 1 minuto. Clique **Sincronizar agora** → deve dizer "Tudo já estava sincronizado".
+2. No app do conselheiro (rede do roteador, servidor local ativo), escaneie **um QR de uma unidade de teste**. No painel
+   aparece 🕓 e, em seguida, ✅ (alguns segundos).
+3. No **Console do Firebase → Firestore → `submissions`**, procure o documento `scan_…` e confira unidade, prova e pontos.
+   **Apague esse documento de teste** (e o registro local de teste, se não quiser que conte).
+4. **Teste da queda:** desconecte a Starlink, escaneie outro QR de teste → o painel fica 🟡 "Sem internet — 1 item aguardando
+   envio". Reconecte → em até ~1 minuto fica 🟢 sozinho.
+
 ---
 
 ## PARTE 2 — Usar no dia do evento
@@ -207,6 +257,9 @@ Se aparecer **"⚠️ HTTPS DESLIGADO"**, o app instalado nos celulares **não c
 ---
 
 ## O que ainda NÃO existe
-- **Sincronização do servidor local com a nuvem (Firebase):** scans feitos no servidor local só aparecem na nuvem depois
-  dessa fase. Até lá, trate o PC do evento como a fonte da verdade durante o evento e **guarde os backups** (`backups\`).
-- Painel de status do PC.
+- **Fotos/comprovantes** enviados pelo servidor local ficam no PC (o registro sobe, o arquivo não).
+- Fila offline do fiscal e do portal regional; acesso ao app sem instalação prévia.
+
+## Ranking
+Nos celulares ligados à rede do evento, o ranking (tela de login, portais e painel do admin) vem **do servidor local**;
+fora dela, da nuvem. Sempre aparece embaixo a hora da última atualização (ex.: *"Atualizado às 14:32 · servidor local"*).

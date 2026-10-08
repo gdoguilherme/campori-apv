@@ -7,6 +7,8 @@ const { Store } = await import('./db.js');
 const { createApp } = await import('./app.js');
 const { startBackups } = await import('./backup.js');
 const { startServers } = await import('./https.js');
+const { createSyncEngine } = await import('./sync/engine.js');
+const { openFirebase } = await import('./sync/cloud.js');
 
 const config = loadConfig();
 const log = createLogger(config.logDir, 'server');
@@ -20,7 +22,9 @@ if (config.qrSecretIsDev) log.warn('Usando QR_SECRET de DESENVOLVIMENTO — NÃO
 const store = new Store(config.dbPath);
 startBackups(store, config, log);
 let servers = null;
-const app = createApp({ store, config, log, tls: () => servers?.tls() ?? null });
+// Sincronização com o Firebase em SEGUNDO PLANO (nada nas rotas espera a nuvem). Só liga com CLOUD_SYNC=1.
+const engine = createSyncEngine({ store, config, log, getCloud: async () => openFirebase(config) });
+const app = createApp({ store, config, log, tls: () => servers?.tls() ?? null, engine });
 
 try {
   servers = await startServers({ app, config, log });
@@ -34,6 +38,7 @@ const tls = servers.tls();
 log.info(`Servidor local Campori APV v${config.version} no ar — HTTP :${config.port}${tls.enabled ? ` · HTTPS :${config.httpsPort}` : ' · HTTPS desligado'} — banco ${config.dbPath}`);
 console.log('\n  ✅ SERVIDOR LOCAL RODANDO');
 console.log(`     Neste PC:      http://localhost:${config.port}`);
+console.log(`     Painel (PC):   http://localhost:${config.port}/status   ${config.cloudSync ? '(sincronização com a nuvem LIGADA)' : '(sincronização com a nuvem desligada — CLOUD_SYNC=1 liga)'}`);
 if (tls.enabled) {
   const portSuffix = config.httpsPort === 443 ? '' : `:${config.httpsPort}`;
   console.log(`     Celulares:     https://local.gdtmidia.com.br${portSuffix}   (HTTPS ativo, certificado até ${tls.validTo.slice(0, 10)})`);
@@ -43,11 +48,12 @@ if (tls.enabled) {
   ips.forEach(ip => console.log(`     Celulares (só HTTP, sem PWA): http://${ip}:${config.port}`));
 }
 console.log('');
+engine.start();
 
 // Qualquer erro inesperado: registra e sai — o supervisor sobe de novo em segundos
 for (const ev of ['uncaughtException', 'unhandledRejection']) {
   process.on(ev, e => { log.error(`${ev}: ${e?.stack || e}`); process.exit(1); });
 }
-const shutdown = sig => { log.info(`Recebido ${sig}, encerrando...`); servers.close().then(() => { try { store.close(); } catch {} process.exit(0); }); setTimeout(() => process.exit(0), 3000).unref(); };
+const shutdown = sig => { log.info(`Recebido ${sig}, encerrando...`); engine.stop(); servers.close().then(() => { try { store.close(); } catch {} process.exit(0); }); setTimeout(() => process.exit(0), 3000).unref(); };
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));

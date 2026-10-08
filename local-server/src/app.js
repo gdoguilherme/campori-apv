@@ -9,9 +9,11 @@ import { dataRouter } from './routes/data.js';
 import { businessRouter } from './routes/business.js';
 import { uploadRouter } from './routes/upload.js';
 import { syncRouter } from './routes/sync.js';
+import { statusRouter } from './routes/status.js';
 import { COLLECTIONS } from './db.js';
 
-export function createApp({ store, config, log, tls = () => null }) {
+export function createApp({ store, config, log, tls = () => null, engine = null, isLocalRequest }) {
+  const startedAt = Date.now();
   const auth = createAuth({ store, config });
   const ctx = { store, config, log, auth };
   const app = express();
@@ -49,6 +51,7 @@ export function createApp({ store, config, log, tls = () => null }) {
       counts: Object.fromEntries(COLLECTIONS.map(c => [c, store.count(c)])),
       qrSecretConfigured: !config.qrSecretIsDev,
       https: tls(),   // { enabled, port, validTo, daysLeft, error } — para conferir do celular
+      sync: engine ? (({ cloud, push }) => ({ cloud: cloud.state, pending: push.pending.total, lastSuccessAt: push.lastSuccessAt }))(engine.status()) : null,
     });
   });
 
@@ -59,6 +62,7 @@ export function createApp({ store, config, log, tls = () => null }) {
   app.use('/upload', uploadRouter(ctx));
   app.use('/data', dataRouter(ctx));
   app.use('/sync', syncRouter(ctx));
+  app.use('/status', statusRouter({ store, config, engine, startedAt, isLocalRequest }));   // painel de status do PC
   app.use('/', businessRouter(ctx));
   app.use('/files', express.static(config.uploadDir, { fallthrough: true }));
 

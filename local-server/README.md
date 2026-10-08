@@ -23,6 +23,8 @@ cenários aleatórios.
 | `src/db.js` | Schema SQLite: 1 tabela por coleção do Firestore (`regions, units, participants, requirements, submissions, disciplinaryActions, auditLog, users`), doc completo em JSON + colunas indexadas + `updatedAt/deleted/dirty` (prontos p/ sincronização) |
 | `src/app.js`, `src/routes/*` | API HTTP |
 | `src/server.js` | Processo do servidor |
+| `src/sync/` | Sincronização com o Firebase em segundo plano: `engine.js` (laço, backoff, estado), `push.js` (envio por tipo de dado), `convert.js` (merge de 3 vias), `cloud.js` (firebase-admin), `status.js` (resumo do painel) — ver [OFFLINE.md](../OFFLINE.md) |
+| `src/routes/status*` | Painel de status `http://localhost:8787/status` (PIN fora do PC) |
 | `src/supervisor.js` | Watchdog: reinicia em crash, mata/reinicia se `/health` travar, evita instância duplicada |
 | `INICIAR.bat` | Duplo-clique: sobe o watchdog (e re-sobe o próprio watchdog se ele morrer) |
 

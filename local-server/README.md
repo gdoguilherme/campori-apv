@@ -51,6 +51,27 @@ curl -s -XPOST $B/qr/redeem -H "authorization: Bearer $C" -H 'content-type: appl
 curl -s $B/ranking                                                                                        # público, anônimo
 ```
 
+## HTTPS (celulares)
+O app instalado vem de `https://campori.gdtmidia.com.br` e só pode falar com um servidor **HTTPS válido**:
+`https://local.gdtmidia.com.br` (A → IP do PC; certificado Let's Encrypt emitido com win-acme, DNS-01 no Cloudflare —
+passo a passo em [GUIA-WINDOWS.md](GUIA-WINDOWS.md), seção HTTPS).
+
+| `.env` | Padrão | |
+|---|---|---|
+| `HTTPS_CERT_PATH` / `HTTPS_KEY_PATH` | — | PEM (`...-chain.pem` + `...-key.pem`); relativo = a partir de `local-server/` |
+| `HTTPS_PORT` | `443` | 443 = URL sem `:porta` |
+| `CORS_ORIGINS` | — | extras (já aceitas: `https://campori.gdtmidia.com.br`, `https://local.gdtmidia.com.br`, `localhost`) |
+
+- Com os dois arquivos válidos: HTTPS na `HTTPS_PORT` **e** HTTP na `PORT` (watchdog, testes locais). Sem eles — ou com
+  arquivo ausente, chave que não casa, certificado inválido ou porta ocupada — o servidor **não cai**: sobe só em HTTP e
+  registra um aviso claro no log/console (`HTTPS DESLIGADO — …`).
+- Certificado renovado pelo win-acme é **recarregado sem reiniciar**; o log avisa quando faltam <15 dias ou se venceu.
+- CORS: só as origens acima recebem cabeçalhos; o preflight responde `Access-Control-Allow-Private-Network: true`
+  (exigido pelo Chrome para site público → rede privada).
+- `GET /health` (sem login) mostra `https: { enabled, port, validTo, daysLeft, error }` — abra no celular para testar.
+- Cert/chave **nunca** vão para o git (`local-server/.gitignore`, `.gitignore` da raiz) nem para o deploy (`.vercelignore`;
+  o Fly só enxerga `server/`) — um teste confere.
+
 ## API
 
 Mesmos caminhos/contratos da nuvem: `POST /users/login`, `/users/*`, `POST /qr/generate`,

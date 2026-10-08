@@ -4,7 +4,7 @@
 // A lista e a VERSION são geradas por `node scripts/build-sw.mjs` (rodar antes de cada deploy).
 
 /* BUILD:START */
-const VERSION = '3ecde99c22';
+const VERSION = '2ac578c2e1';
 const SHELL = [
   "/assets/favicon/favicon-16.png",
   "/assets/favicon/favicon-180.png",
@@ -19,10 +19,12 @@ const SHELL = [
   "/css/base.css",
   "/css/dbv.css",
   "/js/admin.js",
+  "/js/api-local.js",
   "/js/api.js",
   "/js/auth.js",
   "/js/config.js",
   "/js/conselheiro.js",
+  "/js/firebase-stub.js",
   "/js/firebase.js",
   "/js/fiscal.js",
   "/js/net.js",

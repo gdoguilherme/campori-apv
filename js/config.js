@@ -8,8 +8,11 @@ const isDevHost = host === 'localhost' || host === '127.0.0.1' || host === '[::1
 
 // Servidor local do evento (PC na rede do roteador). Em desenvolvimento: http://localhost:8787.
 // Se a própria página foi aberta pelo servidor local (porta 8787), ele é a mesma origem.
+// Página servida pelo servidor local com o "modo local total" (o servidor injeta a flag): backend = a própria origem.
+export const LOCAL_APP = globalThis.__CAMPORI_LOCAL_APP === 1;
+
 export const LOCAL_SERVER_URL = (ls('campori_local_url') ||
-  (location.port === '8787' ? location.origin : isDevHost ? 'http://localhost:8787' : 'https://local.gdtmidia.com.br')
+  (LOCAL_APP ? location.origin : location.port === '8787' ? location.origin : isDevHost ? 'http://localhost:8787' : 'https://local.gdtmidia.com.br')
 ).replace(/\/$/, '');
 
 // Backend na nuvem (Fly.io)

@@ -213,3 +213,23 @@ Quando o app é aberto **pelo servidor local** (`https://local.gdtmidia.com.br` 
   `HELP_WIFI_PASSWORD`), endereço + **QR Code**, como instalar no Android e no iPhone e "não abriu?". A tela de login ganha um
   botãozinho "ℹ️ Ajuda".
 - Testes: `test/local-access.test.js` (raiz, nenhuma página com CDN externo, bibliotecas, ajuda, PWA, original intacto).
+
+## Modo local total (app aberto pelo servidor do evento)
+
+Quando a página é aberta por `https://local.gdtmidia.com.br` (ou `http://localhost:8787`), **todos os perfis** (admin, aprovador,
+fiscal, região, conselheiro) usam o servidor local como backend — sem Firestore, sem nuvem, sem internet.
+
+| Peça | O que faz |
+|---|---|
+| `js/api-local.js` | Mesmas exportações do `js/api.js`, mas via REST + `Authorization: Bearer` na **própria origem**. Listeners em tempo real viram **polling**: a cada 3 s consulta `GET /health` → `revision`; só rebaixa a coleção quando algo mudou e só chama o `onUpdate` se o conteúdo mudou (nada de re-render à toa). Pausa com a aba oculta. |
+| `js/firebase-stub.js` | Substitui `js/firebase.js`: qualquer uso do Firestore **falha alto** em vez de sair para a internet. |
+| Import map | O servidor injeta no `<head>` das páginas que serve: `/js/api.js → /js/api-local.js`, `/js/firebase.js → /js/firebase-stub.js`, e `window.__CAMPORI_LOCAL_APP=1`. A nuvem (Vercel) **não** recebe isso → comportamento idêntico ao de antes. |
+| `js/config.js` / `js/net.js` | Com a flag, o "servidor local" é a própria origem (qualquer porta) e **nunca** se sonda a nuvem; `isCloudReachable()` passa a testar o servidor local (o envio de comprovação do conselheiro depende dele). |
+| Gravações offline | Login, criar/editar usuários, regiões, unidades, participantes, requisitos, envios, revisões, disciplina e **upload** (`/upload` → `data/uploads`) gravam direto no SQLite local com `dirty=1`; a sincronização existente leva à nuvem depois. |
+| Servidor | Região pode editar o **próprio perfil** (`warCry`, `extraInfo`, `logoUrl`) via `PATCH /data/regions/:id` — nenhum outro campo/região. |
+
+**Kill switch:** `LOCAL_APP_MODE=0` no `.env` (e reiniciar) → o servidor para de injetar o import map; as páginas voltam a usar o
+Firestore, como antes. Requisitos do navegador: Chrome/Android ≥ 89, iOS Safari ≥ 16.4 (import maps).
+
+Testes: `test/local-mode.test.js` (cada função do `api-local.js` contra um servidor real, polling, "nenhuma requisição saiu do
+servidor local", kill switch, nuvem intocada), `test/net-local-app.test.js`, `test/config-url.test.js`.

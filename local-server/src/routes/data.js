@@ -5,6 +5,7 @@ import { ADMIN_ROLES } from '../auth.js';
 // CRUD genérico das coleções (equivalente ao acesso direto ao Firestore que o frontend faz
 // hoje). Regras de negócio sensíveis têm rotas próprias (business.js) e coleções protegidas aqui.
 const MIXED = [...ADMIN_ROLES, 'region', 'counselor'];
+const REGION_PROFILE_FIELDS = ['warCry', 'extraInfo', 'logoUrl'];
 const WRITE_ROLES = {
   regions: ADMIN_ROLES,
   requirements: ADMIN_ROLES,
@@ -60,6 +61,12 @@ export function dataRouter({ store, auth }) {
       const mine = sub && (req.user.role === 'counselor' ? sub.unitId === req.user.unitId : (!sub.unitId && sub.regionId === req.user.regionId));
       if (!mine) throw httpError(403, 'Sem permissão');
       return res.json(store.update(col, id, { proofUrl: req.body?.proofUrl ?? null }));
+    }
+    // região editando o PRÓPRIO perfil (nome de guerra, logo, informações extras) — nada além disso
+    if (col === 'regions' && req.user.role === 'region' && id === req.user.regionId) {
+      const patch = {};
+      for (const k of REGION_PROFILE_FIELDS) if (k in (req.body || {})) patch[k] = req.body[k];
+      return res.json(store.update(col, id, patch));
     }
     throw httpError(403, 'Sem permissão');
   });

@@ -62,6 +62,8 @@ export function loadConfig(overrides = {}) {
     helpWifiPassword: String(overrides.helpWifiPassword ?? env.HELP_WIFI_PASSWORD ?? ''),
     // Chave de emergência do modo local total (etapa 1): LOCAL_APP_MODE=0 → as páginas usam a nuvem como antes
     localAppMode: overrides.localAppMode ?? env.LOCAL_APP_MODE !== '0',
+    // Modo local total: as páginas servidas por aqui trocam api.js/firebase.js por versões que só falam com este servidor
+    importMapJson: overrides.importMapJson ?? JSON.stringify({ imports: { '/js/api.js': '/js/api-local.js', '/js/firebase.js': '/js/firebase-stub.js' } }),
     syncTickMs: Number(overrides.syncTickMs ?? env.SYNC_TICK_MS ?? 10_000),
     // PIN do painel /status quando aberto de OUTRO aparelho (no próprio PC não pede)
     statusPin: String(overrides.statusPin ?? env.STATUS_PIN ?? ''),

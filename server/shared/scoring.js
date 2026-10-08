@@ -78,6 +78,22 @@ export function computeUnitScores(submissions, units, disciplinaryActions = []) 
   return Object.entries(scores).map(([id, v]) => ({ id, ...v })).sort((a, b) => b.total - a.total);
 }
 
+// Total de UMA unidade com a composição "X da unidade + Y da região − Z de disciplina", calculado pela MESMA
+// computeUnitScores do ranking (então o número do portal do Conselheiro sempre bate com o ranking):
+//   unitSubmissions   — submissões com unitId = unidade (Conselheiro / QR / fiscal no nível da unidade)
+//   regionSubmissions — submissões SEM unitId da região da unidade (Regional / fiscal no nível da região): valem p/ todas as unidades
+//   disciplinaryActions — qualquer lista; só entram as da unidade ou da região dela
+export function computeUnitBreakdown({ unit, unitSubmissions = [], regionSubmissions = [], disciplinaryActions = [] }) {
+  const one = (subs, disc = []) => computeUnitScores(subs, [unit], disc)[0]?.total ?? 0;
+  const own = one(unitSubmissions.filter(s => s.unitId === unit.id));
+  const region = one(regionSubmissions.filter(s => !s.unitId && s.regionId === unit.regionId));
+  const discipline = disciplinaryActions
+    .filter(d => (d.targetType === 'unit' && d.targetId === unit.id) || (d.targetType === 'region' && d.targetId === unit.regionId))
+    .reduce((a, d) => a + (d.points || DISCIPLINE_POINTS), 0);
+  const total = one([...unitSubmissions, ...regionSubmissions], disciplinaryActions);   // exatamente o que o ranking calcula (com o piso em 0)
+  return { own, region, discipline, total, floored: own + region - discipline < 0 };
+}
+
 // Classificação relativa à maior pontuação (não a um total fixo de pontos possíveis):
 // ⭐⭐⭐ 80-100% · ⭐⭐ 60-79% · ⭐ abaixo de 59%
 export function computeStars(total, maxTotal) {

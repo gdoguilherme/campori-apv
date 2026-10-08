@@ -196,3 +196,24 @@ carga**; scan do PC **substituído na nuvem** converge; **login** de usuário cr
 **desempenho** (~6 mil documentos). Ranking (`test/ranking.test.js`): servidor local com `?meta=1`, app no local / na
 nuvem / sem rede (cópia guardada) / prazo, ranking identificado com token. Painel: botão "Atualizar dados da nuvem".
 Rodar `npm test` em máquina muito carregada pode estourar prazos de relógio; os testes conferem comportamento, não tempo.
+
+
+---
+
+# Portal do Conselheiro — total da unidade = ranking
+
+O card **"✅ pts confirmados"** é a pontuação **total da unidade**, calculada pela **mesma função do ranking**
+(`computeUnitScores`, via `computeUnitBreakdown` em `shared/scoring.js`) e mostra a composição:
+**"X da unidade + Y da região − Z de disciplina"** (com "mínimo 0" quando o piso do ranking entra em ação).
+- **X** = submissões com `unitId` da unidade (requisitos do Conselheiro, QR, avaliação do Fiscal no nível da unidade);
+- **Y** = submissões **sem `unitId`** da região da unidade (requisito Regional / avaliação do Fiscal no nível da região): valem para todas as unidades;
+- **Z** = descontos de disciplina da unidade ou da região inteira.
+- **"pts possíveis"** = requisitos do Conselheiro **+** os da região que valem para a unidade ("N da unidade + M da região").
+- Nova seção **"🗺️ Pontos da região (valem para todas as unidades)"**, somente leitura, com status e pontos recebidos de cada requisito.
+  Lista os requisitos **não-Conselheiro** (Regional e "Só Fiscal") da **modalidade da região** — a mesma regra do portal regional —
+  porque os dois tipos pontuam todas as unidades quando avaliados no nível da região.
+- **Offline:** `GET /sync/bootstrap` (servidor local **e** nuvem) passou a trazer `regionRequirements`, `regionSubmissions` e
+  `disciplinaryActions` (só as que atingem a unidade/região; **sem o motivo**), guardados no snapshot do IndexedDB.
+  A fila, o scan e a regra de duplicidade **não foram alterados**.
+- Testes: o total do aparelho == ranking do servidor em **4000 cenários aleatórios** e no cenário 100 + 50 + 30 = 180, no servidor
+  local e no adaptador da nuvem (`breakdown.test.js`, `portal-points.test.js`, `sync-cloud.test.js`).

@@ -3,7 +3,7 @@ import {
   rname, toast, showBanner, updatePassword, addSubmission, uploadFile, updateSubmissionProof, reqFilledBy,
   renderAnonRanking, setRegionCache
 } from './api.js';
-import { isDeadlinePassed } from '../shared/scoring.js';
+import { isDeadlinePassed, computeUnitBreakdown } from '../shared/scoring.js';
 import { evaluateOfflineScan } from '../shared/sync.js';
 import { getServerState, onServerChange, resolveServer, isCloudReachable, withTimeout } from './net.js';
 import { TIMEOUTS } from './config.js';
@@ -30,6 +30,9 @@ const S = {
   participants: [],
   requirements: [],
   submissions: [],     // submissions da unidade (confirmadas pelo servidor)
+  regionRequirements: [], // requisitos que valem para toda a região (Regional / Só Fiscal), da modalidade dela
+  regionSubmissions: [],  // submissões no nível da região (sem unitId): pontuam TODAS as unidades da região
+  disciplinary: [],       // descontos de disciplina que atingem a unidade ou a região dela
   ranking: [],         // ranking anônimo [{ total }]
   queue: [],           // fila de scans deste aparelho/usuário (IndexedDB)
   net: { kind: 'none', online: true },
@@ -84,6 +87,9 @@ function applySnapshot(snap) {
   S.participants = d?.participants || [];
   S.requirements = d?.requirements || [];
   S.submissions = d?.submissions || [];
+  S.regionRequirements = d?.regionRequirements || [];
+  S.regionSubmissions = d?.regionSubmissions || [];
+  S.disciplinary = d?.disciplinaryActions || [];
   S.ranking = d?.ranking || [];
   if (d?.regions) setRegionCache(d.regions);
 }
@@ -142,7 +148,8 @@ function vPortal() {
 
   // Requisitos do tipo Conselheiro — sem distinção de modalidade (unidades são mistas)
   const visibleReqs = S.requirements.filter(r => r.active !== false && reqFilledBy(r) === 'conselheiro');
-  const totalPossible = visibleReqs.reduce((a, r) => a + (r.points || 0), 0);
+  const regionPossible = S.regionRequirements.reduce((a, r) => a + (r.points || 0), 0);
+  const totalPossible = visibleReqs.reduce((a, r) => a + (r.points || 0), 0) + regionPossible;   // da unidade + os que valem da região
 
   // Submission que representa o requisito no card: aprovada > pendente > mais recente.
   // Registros "substituídos" (scan de QR que perdeu para um mais antigo de outro aparelho)
@@ -154,15 +161,18 @@ function vPortal() {
     if (!cur || rank(s) > rank(cur) || (rank(s) === rank(cur) && (s.submittedAt?.seconds || 0) > (cur.submittedAt?.seconds || 0)))
       subByReq[s.requirementId] = s;
   });
-  const approvedFromServer = S.submissions
-    .filter(s => s.status === 'approved')
-    .reduce((a, s) => a + (s.requirementPoints || 0), 0);
-  // scan já aceito pelo servidor mas que o snapshot ainda não trouxe (até a próxima atualização)
+  // ✅ PONTUAÇÃO TOTAL DA UNIDADE = a mesma função do ranking (computeUnitScores, via computeUnitBreakdown):
+  //    pontos da unidade + pontos da região (valem p/ todas as unidades) − disciplina.
+  // Inclui scans que o servidor já aceitou mas o snapshot ainda não trouxe (até a próxima atualização).
   const knownIds = new Set(S.submissions.map(s => s.id));
-  const approvedExtra = S.queue
+  const acceptedNotInSnapshot = S.queue
     .filter(q => q.status === STATUS.SINCRONIZADO && q.submissionId && !knownIds.has(q.submissionId))
-    .reduce((a, q) => a + (q.pontos || 0), 0);
-  const approvedPts = approvedFromServer + approvedExtra;           // ✅ confirmados pelo servidor
+    .map(q => ({ id: q.submissionId, unitId: q.unitId, regionId: unit?.regionId, requirementId: q.requisitoId, status: 'approved',
+      requirementPoints: q.pontos, submittedAt: { seconds: Math.floor(q.scanTimestamp / 1000), nanoseconds: 0 } }));
+  const bd = unit
+    ? computeUnitBreakdown({ unit, unitSubmissions: [...S.submissions, ...acceptedNotInSnapshot], regionSubmissions: S.regionSubmissions, disciplinaryActions: S.disciplinary })
+    : { own: 0, region: 0, discipline: 0, total: 0, floored: false };
+  const approvedPts = bd.total;
   const queuedPts = pendingItems().reduce((a, q) => a + (q.pontos || 0), 0); // 🕓 só no aparelho — ainda NÃO contam
   const pendingPts = S.submissions                                  // ⏳ comprovações aguardando aprovação do admin
     .filter(s => s.status === 'pending')
@@ -204,6 +214,7 @@ function vPortal() {
         <div id="pts-confirmed" style="background:rgba(255,255,255,.18);border-radius:.875rem;padding:.65rem .75rem;text-align:center;">
           <div style="font-size:1.5rem;font-weight:800;">${approvedPts}</div>
           <div style="font-size:.68rem;color:${tc.muted};">✅ pts confirmados</div>
+          <div id="pts-breakdown" style="font-size:.62rem;color:${tc.muted};margin-top:.2rem;line-height:1.25;">${bd.own} da unidade + ${bd.region} da região − ${bd.discipline} de disciplina${bd.floored ? ' (mínimo 0)' : ''}</div>
         </div>
         <div id="pts-queued" style="background:rgba(251,191,36,.22);border:1px dashed rgba(253,230,138,.7);border-radius:.875rem;padding:.65rem .75rem;text-align:center;">
           <div style="font-size:1.5rem;font-weight:800;color:#fde68a;">${queuedPts}</div>
@@ -215,7 +226,7 @@ function vPortal() {
         </div>
         <div style="background:rgba(255,255,255,.18);border-radius:.875rem;padding:.65rem .75rem;text-align:center;">
           <div style="font-size:1.25rem;font-weight:800;color:#bbf7d0;">${totalPossible}</div>
-          <div style="font-size:.68rem;color:${tc.muted};">pts possíveis</div>
+          <div style="font-size:.68rem;color:${tc.muted};">pts possíveis <span style="font-size:.6rem;">(${totalPossible - regionPossible} da unidade + ${regionPossible} da região)</span></div>
         </div>
       </div>
     </div>
@@ -233,6 +244,8 @@ function vPortal() {
            </div>`
         : visibleReqs.map(req => reqCard(req, subByReq[req.id], tc, queueByReq[req.id])).join('')}
     </div>
+
+    ${regionSection(bd.region)}
 
     ${qrHistory()}
 
@@ -265,6 +278,45 @@ function vPortal() {
       </div>
     </div>
   </div>`;
+}
+
+// ── PONTOS DA REGIÃO (somente leitura) — valem para TODAS as unidades da região ──
+function regionSection(regionPts) {
+  if (!S.snapshot) return '';
+  const rank = s => (s.status === 'approved' ? 2 : s.status === 'pending' ? 1 : 0);
+  const subByReq = {};
+  S.regionSubmissions.forEach(s => {
+    const cur = subByReq[s.requirementId];
+    if (!cur || rank(s) > rank(cur) || (rank(s) === rank(cur) && (s.submittedAt?.seconds || 0) > (cur.submittedAt?.seconds || 0))) subByReq[s.requirementId] = s;
+  });
+  const row = r => {
+    const sub = subByReq[r.id];
+    const [bg, fg, txt, border] =
+      sub?.status === 'approved' ? ['#d1fae5', '#065f46', `✅ Aprovado · ${sub.requirementPoints ?? r.points} pts recebidos`, '#16a34a']
+      : sub?.status === 'pending' ? ['#fef3c7', '#92400e', '⏳ Aguardando aprovação', '#f59e0b']
+      : sub?.status === 'rejected' ? ['#fee2e2', '#991b1b', '❌ Recusado', '#ef4444']
+      : ['#f1f5f9', '#64748b', 'Ainda não enviado pela região', '#cbd5e1'];
+    return `
+    <div class="region-req" data-status="${sub?.status || 'none'}" style="background:#fff;border-radius:1rem;border:1px solid #e2e8f0;border-left:4px solid ${border};padding:.8rem 1rem;">
+      <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.4rem;">
+        ${r.category ? `<span style="background:#eef2ff;color:#4338ca;font-size:.68rem;font-weight:600;padding:.15rem .55rem;border-radius:999px;">${esc(r.category)}</span>` : ''}
+        <span style="background:#dbeafe;color:#1d4ed8;font-size:.68rem;font-weight:700;padding:.15rem .55rem;border-radius:999px;">${r.points} pts</span>
+        ${r.filledBy === 'fiscal' ? '<span style="background:#ede9fe;color:#5b21b6;font-size:.68rem;font-weight:700;padding:.15rem .55rem;border-radius:999px;">⚖️ Avaliado pelo Fiscal</span>' : ''}
+      </div>
+      <div style="font-weight:700;color:#1e293b;font-size:.9rem;">${esc(r.name)}</div>
+      <div style="margin-top:.45rem;"><span style="background:${bg};color:${fg};font-size:.76rem;font-weight:700;padding:.25rem .7rem;border-radius:999px;display:inline-block;">${txt}</span></div>
+    </div>`;
+  };
+  return `
+    <div id="region-section" style="padding:0 1rem 1rem;display:flex;flex-direction:column;gap:.5rem;">
+      <div>
+        <div style="font-weight:800;color:#1e293b;">🗺️ Pontos da região <span style="font-weight:600;color:#64748b;font-size:.8rem;">(valem para todas as unidades)</span></div>
+        <div style="font-size:.75rem;color:#64748b;margin-top:.15rem;">Somente leitura — enviados pela região ou avaliados pelo Fiscal. <strong id="region-total">${regionPts} pts</strong> já contam para a sua unidade.</div>
+      </div>
+      ${S.regionRequirements.length === 0
+        ? '<div style="text-align:center;padding:1.25rem;color:#94a3b8;font-size:.85rem;">Nenhum requisito regional para a modalidade desta região.</div>'
+        : S.regionRequirements.map(row).join('')}
+    </div>`;
 }
 
 // ── BARRA DE ESTADO (online/offline, servidor, pendentes, última atualização) ──

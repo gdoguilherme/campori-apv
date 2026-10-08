@@ -146,3 +146,37 @@ test('nuvem: loadUser recusa usuário inexistente/inativo e remove o hash de sen
   const u = await syncStore.loadUser(db, 'c1');
   assert.ok(u && !('passwordHash' in u) && u.unitId === 'U1');
 });
+
+
+test('nuvem: bootstrap traz os pontos da região e o total no aparelho bate com o ranking (computeUnitScores sobre tudo)', async () => {
+  const { computeUnitScores, computeUnitBreakdown } = await import('../../shared/scoring.js');
+  db.seed('units', 'U2', { name: 'U2', regionId: 'R1' }); db.seed('units', 'U3', { name: 'U3', regionId: 'R2' });
+  db.seed('regions', 'R1', { name: 'Região 1', competitionCategory: 'DBV' }); db.seed('regions', 'R2', { name: 'Região 2', competitionCategory: 'AVT' });
+  const T = ms => new FakeTimestamp(ms);
+  db.seed('requirements', 'REG30', { name: 'Culto regional', points: 30, filledBy: 'regional', active: true, competitionCategory: 'Ambos' });
+  db.seed('requirements', 'FISC20', { name: 'Fiscal', points: 20, filledBy: 'fiscal', active: true });
+  db.seed('requirements', 'SOAVT', { name: 'Só AVT', points: 12, filledBy: 'regional', active: true, competitionCategory: 'AVT' });
+  db.seed('requirements', 'OFF', { name: 'Desativado', points: 9, filledBy: 'regional', active: false });
+  const base = { status: 'approved', submittedAt: T(1000) };
+  db.seed('submissions', 's1', { ...base, unitId: 'U1', regionId: 'R1', requirementId: 'RQ', requirementPoints: 100 });
+  db.seed('submissions', 's2', { ...base, unitId: null, regionId: 'R1', requirementId: 'REG30', requirementPoints: 30, source: 'judge' });
+  db.seed('submissions', 's3', { ...base, unitId: null, regionId: 'R1', requirementId: 'FISC20', requirementPoints: 20, status: 'pending' });
+  db.seed('submissions', 's4', { ...base, unitId: null, regionId: 'R2', requirementId: 'SOAVT', requirementPoints: 12 });
+  db.seed('submissions', 's5', { ...base, unitId: 'U2', regionId: 'R1', requirementId: 'RQ', requirementPoints: 8 });
+  db.seed('disciplinaryActions', 'd1', { targetType: 'unit', targetId: 'U1', reason: 'SEGREDO', points: 5, createdAt: T(5) });
+  db.seed('disciplinaryActions', 'd2', { targetType: 'region', targetId: 'R2', points: 5, createdAt: T(6) });
+  syncStore._resetRankingCache();
+  const b = await syncStore.bootstrap({ db, user });
+  assert.deepEqual(b.regionRequirements.map(r => r.id).sort(), ['FISC20', 'RA', 'REG30']);
+  assert.deepEqual(b.regionSubmissions.map(s => s.id).sort(), ['s2', 's3'], 'só região R1 sem unitId');
+  assert.deepEqual(b.disciplinaryActions.map(d => d.id), ['d1']);
+  assert.ok(!JSON.stringify(b).includes('SEGREDO'));
+  assert.deepEqual(b.regionSubmissions.find(s => s.id === 's2').submittedAt, { seconds: 1, nanoseconds: 0 }, 'Timestamps viram JSON');
+  const all = (await syncStore.bootstrap({ db, user })).ranking;                                  // ranking vem junto
+  const everything = ['submissions', 'units', 'disciplinaryActions'].map(c => [...db._col(c)].map(([id, d]) => ({ id, ...d, submittedAt: d.submittedAt && { seconds: d.submittedAt.seconds, nanoseconds: 0 } })));
+  const rk = Object.fromEntries(computeUnitScores(everything[0], everything[1], everything[2]).map(s => [s.id, s.total]));
+  const bd = computeUnitBreakdown({ unit: b.unit, unitSubmissions: b.submissions, regionSubmissions: b.regionSubmissions, disciplinaryActions: b.disciplinaryActions });
+  assert.deepEqual([bd.own, bd.region, bd.discipline, bd.total], [100, 30, 5, 125]);
+  assert.equal(bd.total, rk.U1, 'cloud: total do aparelho == ranking');
+  assert.ok(Array.isArray(all));
+});

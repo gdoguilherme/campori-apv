@@ -4,6 +4,13 @@ import {
   rname, fmtDate, toast, reqFilledBy,
   doFiscalSuggestion, updatePassword, SCORE_PCTS, generateQrPayload
 } from './api.js';
+import { LOCAL_APP, TIMEOUTS } from './config.js';
+import { getServerState, onServerChange, resolveServer } from './net.js';
+import { requestPersistence } from './offlineDb.js';
+import {
+  FQ_STATUS, listFiscalQueue, saveFiscalEvaluation, syncFiscalNow, startFiscalAutoSync, discardFiscalItem, pruneFiscalQueue,
+  onFiscalQueueChange, onFiscalSynced, getFiscalSyncState, isQueuePersistent
+} from './fiscalQueue.js';
 
 // ── ESTADO ────────────────────────────────────────────────────
 const S = {
@@ -19,7 +26,10 @@ const S = {
   qrReq: null, qrVariant: null, qrLoading: false, qrError: null,
   modal: null,        // 'change-password' | 'qr-list' | 'qr-code'
   loading: false,
+  queue: [],          // fila offline de avaliações (só no modo local)
+  fqOpen: false,
 };
+let _drafts = { scope: null, vals: {} }; // valores digitados e ainda não confirmados (a tela é redesenhada quando chega dado novo)
 
 let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null, _unsubUnits = null;
 
@@ -47,18 +57,120 @@ export function init() {
   _unsubRegions = subRegions(regs => { S.regions = regs; setRegionCache(regs); render(); });
   _unsubUnits   = subUnits(units => { S.units = units; render(); });
 
+  if (LOCAL_APP) initQueue();
   render();
+}
+
+// ── FILA OFFLINE (modo local) ──────────────────────────────────
+let _fqSig = '';
+async function refreshQueue() {
+  S.queue = await listFiscalQueue(S.user.id);
+  const sig = JSON.stringify([S.queue.map(q => [q.id, q.status, q.attempts]), getFiscalSyncState().syncing, getFiscalSyncState().authExpired, getServerState().kind]);
+  if (sig !== _fqSig) { _fqSig = sig; render(); }
+}
+function announce(sum, manual = false) {
+  if (sum.authExpired) toast('🔒 Sessão expirada — entre de novo. As avaliações guardadas serão enviadas.', 'error');
+  if (sum.rejected.length) toast(`⚠️ ${sum.rejected.length} avaliação(ões) não aceita(s): ${sum.rejected[0].message}`, 'error');
+  if (sum.superseded.length) toast(`ℹ️ ${sum.superseded.length} avaliação(ões) ignorada(s): já havia uma mais recente`, 'info');
+  if (sum.accepted.length) toast(`✅ ${sum.accepted.length} avaliação(ões) enviada(s) (aguardando aprovação)`);
+  else if (manual && !sum.rejected.length && !sum.superseded.length && !sum.authExpired) toast(sum.offline ? '📡 Sem conexão com o servidor local' : 'Nada pendente para enviar', sum.offline ? 'error' : 'info');
+}
+function initQueue() {
+  requestPersistence();
+  pruneFiscalQueue(S.user.id).catch(() => {});
+  onFiscalQueueChange(() => refreshQueue());
+  onFiscalSynced(sum => announce(sum));
+  onServerChange(() => refreshQueue());
+  resolveServer().then(() => refreshQueue());
+  startFiscalAutoSync();
+  refreshQueue();
+}
+
+const ST_CHIP = {
+  [FQ_STATUS.PENDENTE]:    ['#fef3c7', '#92400e', '🕓 Aguardando envio'],
+  [FQ_STATUS.ENVIADO]:     ['#dcfce7', '#166534', '✅ Enviada'],
+  [FQ_STATUS.SUBSTITUIDO]: ['#e0e7ff', '#3730a3', '↪️ Ignorada (já havia mais recente)'],
+  [FQ_STATUS.REJEITADO]:   ['#fee2e2', '#991b1b', '❌ Recusada'],
+};
+function fqBar() {
+  if (!LOCAL_APP) return '';
+  const srv = getServerState(), sync = getFiscalSyncState();
+  const online = srv.kind === 'local';
+  const pend = S.queue.filter(q => q.status === FQ_STATUS.PENDENTE);
+  const recent = S.queue.slice(0, 20);
+  const alerts = [
+    sync.authExpired ? '🔒 Sessão expirada — saia e entre de novo; as avaliações guardadas continuam na fila e serão enviadas.' : '',
+    !isQueuePersistent() ? '⚠️ Este navegador não guarda a fila ao fechar o app — mantenha esta tela aberta até enviar.' : '',
+    sync.lastError ? `Último erro: ${sync.lastError}` : ''
+  ].filter(Boolean);
+  return `
+  <div style="position:sticky;top:0;z-index:60;background:#fff;border-bottom:1px solid #e2e8f0;padding:.45rem .75rem;font-size:.78rem;">
+    <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
+      <span style="font-weight:700;color:${online ? '#166534' : '#b91c1c'};">${online ? '🟢 Online · servidor local' : '🔴 Sem conexão com o servidor local'}</span>
+      ${pend.length ? `<span style="background:#fef3c7;color:#92400e;font-weight:700;padding:.15rem .55rem;border-radius:999px;">🕓 ${pend.length} aguardando envio</span>` : ''}
+      <span style="flex:1"></span>
+      ${pend.length ? `<button onclick="W.fqSync()" ${sync.syncing ? 'disabled' : ''} style="background:#2D6A2A;color:#fff;border:none;border-radius:.6rem;padding:.35rem .8rem;font-weight:700;font-size:.78rem;cursor:pointer;opacity:${sync.syncing ? .6 : 1};">${sync.syncing ? '⏳ Enviando…' : '🔄 Sincronizar agora'}</button>` : ''}
+      ${recent.length ? `<button onclick="W.fqToggle()" style="background:#f1f5f9;color:#334155;border:none;border-radius:.6rem;padding:.35rem .7rem;font-size:.78rem;cursor:pointer;">${S.fqOpen ? 'Ocultar' : 'Ver'} fila (${recent.length})</button>` : ''}
+    </div>
+    ${alerts.map(a => `<div style="margin-top:.35rem;color:#92400e;background:#fffbeb;border-radius:.5rem;padding:.35rem .5rem;">${a}</div>`).join('')}
+    ${S.fqOpen ? `<div style="margin-top:.45rem;display:flex;flex-direction:column;gap:.3rem;max-height:40vh;overflow:auto;">
+      ${recent.map(q => {
+        const [bg, fg, label] = ST_CHIP[q.status] || ST_CHIP[FQ_STATUS.PENDENTE];
+        return `<div style="display:flex;align-items:center;gap:.5rem;background:#f8fafc;border-radius:.6rem;padding:.4rem .55rem;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-weight:700;color:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(q.requirementName)} · ${q.points} pts</div>
+            <div style="color:#64748b;">${esc(q.scopeLabel)} · ${new Date(q.evaluatedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}${q.message ? ` · ${esc(q.message)}` : ''}</div>
+          </div>
+          <span style="background:${bg};color:${fg};font-weight:700;padding:.15rem .5rem;border-radius:999px;white-space:nowrap;">${label}</span>
+          ${q.status !== FQ_STATUS.PENDENTE ? `<button onclick="W.fqDiscard('${q.id}')" title="Tirar da lista" style="background:none;border:none;cursor:pointer;color:#94a3b8;">🗑️</button>` : ''}
+        </div>`;
+      }).join('')}</div>` : ''}
+  </div>`;
+}
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const scopeKey = () => `${S.fiscalScopeType}:${S.fiscalUnitId || S.fiscalRegionId}`;
+const scopeLabel = () => (S.fiscalScopeType === 'unit'
+  ? S.units.find(u => u.id === S.fiscalUnitId)?.name
+  : S.regions.find(r => r.id === S.fiscalRegionId)?.name) || '';
+
+// Salva a avaliação. Modo local: vai primeiro para a fila do aparelho (IndexedDB) e é enviada em seguida;
+// nuvem: caminho de sempre (Firestore).
+async function saveEvaluation(req, regionId, pts, subItemScores, subItemPcts, existing, isUnit) {
+  if (!LOCAL_APP) {
+    await doFiscalSuggestion(req, regionId, pts, subItemScores, subItemPcts, S.user, existing?.id || null, isUnit ? S.fiscalUnitId : null);
+    return;
+  }
+  const item = await saveFiscalEvaluation({
+    user: S.user, req, regionId, unitId: isUnit ? S.fiscalUnitId : null, points: pts, subItemScores, subItemPcts,
+    existingSubId: existing?.id || null, scopeLabel: scopeLabel()
+  }, { waitMs: Math.min(TIMEOUTS.immediateScan, 4000) });
+  await refreshQueue();
+  if (item.status === FQ_STATUS.ENVIADO) toast(`✅ ${req.name} — ${pts} pts (aguardando aprovação)`);
+  else if (item.status === FQ_STATUS.SUBSTITUIDO) toast('ℹ️ Já existia uma avaliação mais recente para este item — a sua foi ignorada', 'info');
+  else if (item.status === FQ_STATUS.REJEITADO) toast(`⚠️ Avaliação não aceita: ${item.message}`, 'error');
+  else toast(`📥 ${req.name} — ${pts} pts guardado no aparelho. Será enviado quando o servidor local voltar.`, 'info');
 }
 
 // ── RENDER ────────────────────────────────────────────────────
 function render() {
   const el = document.getElementById('app');
   if (!el) return;
+  // modo local: a tela é redesenhada quando chega dado novo/muda a fila — não pode apagar o que o fiscal está digitando
+  if (LOCAL_APP && S.fiscalScopeType) {
+    const vals = {};
+    el.querySelectorAll('input[id^="pts-"]').forEach(i => { vals[i.id] = i.value; });
+    if (Object.keys(vals).length) _drafts = { scope: scopeKey(), vals: { ...(_drafts.scope === scopeKey() ? _drafts.vals : {}), ...vals } };
+  }
   let html = S.fiscalScopeType ? vScore() : vSelectRegion();
   if (S.modal === 'change-password') html += mChangePassword();
   else if (S.modal === 'qr-list')    html += mQrList();
   else if (S.modal === 'qr-code')    html += mQrCode();
-  el.innerHTML = html;
+  const focusId = LOCAL_APP ? document.activeElement?.id : null;
+  el.innerHTML = fqBar() + html;
+  if (LOCAL_APP && S.fiscalScopeType && _drafts.scope === scopeKey()) {
+    for (const [id, v] of Object.entries(_drafts.vals)) { const i = document.getElementById(id); if (i && i.value !== v) i.value = v; }
+    if (focusId?.startsWith('pts-')) document.getElementById(focusId)?.focus();
+  }
 }
 
 // ── VIEW: SELECIONAR REGIÃO OU UNIDADE ─────────────────────────
@@ -187,6 +299,13 @@ function vScore() {
   S.submissions
     .filter(s => s.source === 'judge' && (isUnit ? s.unitId === S.fiscalUnitId : (s.regionId === S.fiscalRegionId && !s.unitId)))
     .forEach(s => { existingMap[s.requirementId] = s; });
+  // avaliações guardadas no aparelho e ainda não enviadas aparecem como se já estivessem salvas (marcadas "na fila")
+  if (LOCAL_APP) {
+    for (const q of S.queue.filter(x => x.status === FQ_STATUS.PENDENTE).sort((a, b) => a.evaluatedAt - b.evaluatedAt)) {
+      if (isUnit ? q.unitId !== S.fiscalUnitId : (q.regionId !== S.fiscalRegionId || q.unitId)) continue;
+      existingMap[q.requirementId] = { ...(existingMap[q.requirementId] || {}), requirementPoints: q.points, subItemPcts: q.subItemPcts, status: 'pending', _queued: true };
+    }
+  }
 
   return `
   <div style="min-height:100dvh;background:#eef6ee;">
@@ -231,7 +350,9 @@ function scoreCard(req, existing) {
   const borderLeft     = deadlinePassed ? '4px solid #ef4444' : existing ? '4px solid #2D6A2A' : 'none';
 
   const statusBadge = existing
-    ? existing.status === 'approved'
+    ? existing._queued
+      ? `<span class="badge-fiscal" style="background:#fef3c7;color:#92400e;">🕓 Na fila: ${existing.requirementPoints} pts — será enviado</span>`
+    : existing.status === 'approved'
       ? `<span class="badge-approved">✅ Aprovado: ${existing.requirementPoints} pts</span>`
       : `<span class="badge-fiscal">⚖️ Sugestão: ${existing.requirementPoints} pts — aguardando</span>`
     : '';
@@ -501,7 +622,7 @@ window.W = {
     const regionId = isUnit ? S.units.find(u => u.id === S.fiscalUnitId)?.regionId : S.fiscalRegionId;
     S.loading = true; render();
     try {
-      await doFiscalSuggestion(req, regionId, total, subItemScores, subItemPcts, S.user, existing?.id || null, isUnit ? S.fiscalUnitId : null);
+      await saveEvaluation(req, regionId, total, subItemScores, subItemPcts, existing, isUnit);
       delete S.fiscalScores[reqId];
     } catch (e) {
       toast('Erro ao salvar. Tente novamente.', 'error');
@@ -524,12 +645,17 @@ window.W = {
     const regionId = isUnit ? S.units.find(u => u.id === S.fiscalUnitId)?.regionId : S.fiscalRegionId;
     S.loading = true; render();
     try {
-      await doFiscalSuggestion(req, regionId, pts, null, null, S.user, existing?.id || null, isUnit ? S.fiscalUnitId : null);
+      await saveEvaluation(req, regionId, pts, null, null, existing, isUnit);
+      delete _drafts.vals[`pts-${reqId}`];
     } catch (e) {
       toast('Erro ao salvar. Tente novamente.', 'error');
     }
     S.loading = false; render();
   },
+
+  async fqSync() { announce(await syncFiscalNow({ manual: true }), true); },
+  fqToggle() { S.fqOpen = !S.fqOpen; render(); },
+  async fqDiscard(id) { const q = S.queue.find(x => x.id === id); if (q) await discardFiscalItem(q); },
 
   async doChangePassword() {
     const current = document.getElementById('pwd-current')?.value;

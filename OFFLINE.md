@@ -233,3 +233,21 @@ Firestore, como antes. Requisitos do navegador: Chrome/Android ≥ 89, iOS Safar
 
 Testes: `test/local-mode.test.js` (cada função do `api-local.js` contra um servidor real, polling, "nenhuma requisição saiu do
 servidor local", kill switch, nuvem intocada), `test/net-local-app.test.js`, `test/config-url.test.js`.
+
+### Fila offline do Fiscal (modo local)
+
+Cada avaliação do Fiscal (`js/fiscalQueue.js`) é gravada **primeiro** no IndexedDB do aparelho (store `kv`, chaves `fiscalq:<userId>:<id>`;
+não toca na fila de scans do Conselheiro) e só então enviada a `POST /submissions/fiscal-suggestion`.
+
+- **Idempotência no servidor:** o item leva `clientId` (UUID do aparelho) e `evaluatedAt`. Reenviar o mesmo `clientId` não regrava nada
+  (não "des-aprova" o que o admin já revisou); avaliação **mais antiga** que a registrada é ignorada (`result: "superseded"`); nunca
+  duplica — sem `existingSubId` (ou com id que sumiu) o servidor reaproveita a avaliação do fiscal para o mesmo região/unidade + requisito.
+  Campos novos nos documentos: `fiscalClientId`, `fiscalEvaluatedAt` (a sincronização com a nuvem os leva como qualquer outro campo).
+- **Status por item:** 🕓 aguardando · ✅ enviada · ↪️ ignorada (já havia mais recente) · ❌ recusada (mensagem do servidor; não repete).
+- **Envio:** imediato (espera até 4 s e responde "guardado no aparelho" se não deu), automático ao voltar rede/foco e a cada 8 s com
+  backoff, e botão **🔄 Sincronizar agora**. 401 → fila intacta + aviso de sessão expirada. Pendente nunca é descartado; resolvidos somem em 24 h.
+- **Avisos na tela:** barra fixa com 🟢/🔴 do servidor local, contagem de pendentes, lista da fila, alerta de sessão expirada e de
+  navegador que não guarda dados (IndexedDB indisponível). O cartão do requisito mostra "🕓 Na fila: N pts" até o envio.
+- Só no modo local; na nuvem o fiscal segue pelo caminho de antes.
+
+Testes: `test/fiscal-queue.test.js` (servidor: idempotência, ordem, dedupe, validação; cliente: offline, resposta perdida, 401, 4xx, pendurado, poda).

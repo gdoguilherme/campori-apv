@@ -1,5 +1,5 @@
 // Rede com timeout + escolha do servidor ativo (local primeiro, nuvem como reserva).
-import { LOCAL_SERVER_URL, CLOUD_URL, TIMEOUTS } from './config.js';
+import { LOCAL_SERVER_URL, CLOUD_URL, TIMEOUTS, LOCAL_APP } from './config.js';
 
 export class NetError extends Error {           // não chegou ao servidor (offline, DNS, timeout)
   constructor(message, kind) { super(message); this.name = 'NetError'; this.kind = kind; }
@@ -65,7 +65,8 @@ export function resolveServer({ force = false } = {}) {
   inflight = (async () => {
     const local = await probe(LOCAL_SERVER_URL, TIMEOUTS.probeLocal);
     if (local && local.mode === 'local') { setCurrent({ kind: 'local', base: LOCAL_SERVER_URL }); return current; }
-    const cloud = await probe(CLOUD_URL, TIMEOUTS.probeCloud);
+    // modo local total: não existe "plano B na nuvem" — nada sai para a internet
+    const cloud = LOCAL_APP ? null : await probe(CLOUD_URL, TIMEOUTS.probeCloud);
     setCurrent(cloud ? { kind: 'cloud', base: CLOUD_URL } : { kind: 'none', base: null });
     return current;
   })().finally(() => { inflight = null; });
@@ -74,9 +75,10 @@ export function resolveServer({ force = false } = {}) {
 
 // A nuvem (Firestore/Fly) está alcançável? — usado antes de ações que só existem online
 let cloudSeen = { ok: false, at: 0 };
+// (no modo local total o backend das gravações é o próprio servidor local → é ele que precisa estar no ar)
 export async function isCloudReachable() {
   if (Date.now() - cloudSeen.at < 20_000) return cloudSeen.ok;
-  cloudSeen = { ok: !!(await probe(CLOUD_URL, 3500)), at: Date.now() };
+  cloudSeen = { ok: !!(await probe(LOCAL_APP ? LOCAL_SERVER_URL : CLOUD_URL, 3500)), at: Date.now() };
   return cloudSeen.ok;
 }
 

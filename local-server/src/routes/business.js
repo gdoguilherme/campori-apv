@@ -70,27 +70,44 @@ export function businessRouter({ store, auth }) {
   });
 
   // ── FISCAL: sugestão de pontuação (admin aprova depois) ─────
+  // Idempotente e segura para reenvio da fila offline do aparelho:
+  //  · `clientId` (UUID do aparelho): reenviar o MESMO item não regrava nada (não "des-aprova" o que o admin já revisou);
+  //  · `evaluatedAt` (ms): se já existe avaliação MAIS RECENTE para o mesmo item, a antiga não sobrescreve (result: 'superseded');
+  //  · nunca duplica: sem `existingSubId` (ou com id que sumiu), procura a avaliação do fiscal para o mesmo região/unidade + requisito.
   r.post('/submissions/fiscal-suggestion', requireAuth(['judge', ...ADMIN_ROLES]), (req, res) => {
-    const { requirementId, regionId, unitId = null, points, subItemScores = null, subItemPcts = null, existingSubId = null } = req.body || {};
+    const { requirementId, regionId, unitId = null, points, subItemScores = null, subItemPcts = null, existingSubId = null, clientId = null, evaluatedAt = null } = req.body || {};
     if (typeof points !== 'number' || points < 0) throw httpError(400, 'points inválido');
+    if (clientId !== null && (typeof clientId !== 'string' || clientId.length > 80)) throw httpError(400, 'clientId inválido');
+    const evalAt = Number.isFinite(Number(evaluatedAt)) && evaluatedAt !== null ? Number(evaluatedAt) : null;
     const user = req.user;
-    const sub = store.tx(() => {
+    const out = store.tx(() => {
       const req_ = store.get('requirements', requirementId);
       if (!req_) throw httpError(404, 'Requisito não encontrado');
+      let target = existingSubId ? store.get('submissions', existingSubId) : null;
+      if (target && target.requirementId !== requirementId) target = null; // id de outro requisito: ignora
+      if (!target) {
+        target = store.list('submissions', { filters: { requirementId, regionId } })
+          .find(x => x.source === 'judge' && (x.unitId || null) === (unitId || null)) || null;
+      }
+      if (target && clientId && target.fiscalClientId === clientId) return { ...target, result: 'idempotent' };
+      if (target && evalAt !== null && target.fiscalEvaluatedAt && evalAt < target.fiscalEvaluatedAt) return { ...target, result: 'superseded' };
       const base = {
         requirementPoints: points, subItemScores, subItemPcts, status: 'pending', fiscalSuggestion: true,
         notes: `Avaliado por: ${user.name}`, submittedAt: { __serverTimestamp: true },
-        submittedBy: user.username, submittedByName: user.name
+        submittedBy: user.username, submittedByName: user.name,
+        ...(clientId ? { fiscalClientId: clientId } : {}), ...(evalAt !== null ? { fiscalEvaluatedAt: evalAt } : {})
       };
-      if (existingSubId) return store.update('submissions', existingSubId, base);
-      return store.insert('submissions', {
-        regionId, regionName: regionName(regionId), unitId,
-        requirementId: req_.id, requirementName: req_.name, requirementCategory: req_.category,
-        competitionCategory: req_.competitionCategory || 'Ambos', proofUrl: null, source: 'judge',
-        requirementDeadlineSnapshot: req_.deadline || null, ...base
-      });
+      if (target) return { ...store.update('submissions', target.id, base), result: 'updated' };
+      return {
+        ...store.insert('submissions', {
+          regionId, regionName: regionName(regionId), unitId,
+          requirementId: req_.id, requirementName: req_.name, requirementCategory: req_.category,
+          competitionCategory: req_.competitionCategory || 'Ambos', proofUrl: null, source: 'judge',
+          requirementDeadlineSnapshot: req_.deadline || null, ...base
+        }), result: 'created'
+      };
     });
-    res.json(sub);
+    res.json(out);
   });
 
   // ── REVISÃO (aprovar / rejeitar / reabrir) ──────────────────

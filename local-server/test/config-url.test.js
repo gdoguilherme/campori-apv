@@ -33,3 +33,15 @@ test('override por localStorage (troca sem deploy), com barra final removida', a
   assert.equal(c.LOCAL_SERVER_URL, 'https://outro.exemplo');
   assert.equal(c.CLOUD_URL, 'https://nuvem.exemplo');
 });
+
+test('modo local total (flag injetada pelo servidor) → servidor local = a própria origem, mesmo fora da 8787', async () => {
+  globalThis.__CAMPORI_LOCAL_APP = 1;
+  try {
+    const c = await loadConfig({ hostname: 'local.gdtmidia.com.br', origin: 'https://local.gdtmidia.com.br' });
+    assert.equal(c.LOCAL_APP, true); assert.equal(c.LOCAL_SERVER_URL, 'https://local.gdtmidia.com.br');
+    const d = await loadConfig({ hostname: '127.0.0.1', port: '8797', origin: 'http://127.0.0.1:8797' });
+    assert.equal(d.LOCAL_SERVER_URL, 'http://127.0.0.1:8797');
+  } finally { delete globalThis.__CAMPORI_LOCAL_APP; }
+  const cloud = await loadConfig({ hostname: 'campori.gdtmidia.com.br' });
+  assert.equal(cloud.LOCAL_APP, false); assert.equal(cloud.LOCAL_SERVER_URL, 'https://local.gdtmidia.com.br');
+});

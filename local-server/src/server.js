@@ -38,11 +38,13 @@ const tls = servers.tls();
 log.info(`Servidor local Campori APV v${config.version} no ar — HTTP :${config.port}${tls.enabled ? ` · HTTPS :${config.httpsPort}` : ' · HTTPS desligado'} — banco ${config.dbPath}`);
 console.log('\n  ✅ SERVIDOR LOCAL RODANDO');
 console.log(`     Neste PC:      http://localhost:${config.port}`);
+console.log(`     Ajuda (celulares): http://localhost:${config.port}/ajuda`);
 console.log(`     Painel (PC):   http://localhost:${config.port}/status   ${config.cloudSync ? '(sincronização com a nuvem LIGADA)' : '(sincronização com a nuvem desligada — CLOUD_SYNC=1 liga)'}`);
 if (tls.enabled) {
   const portSuffix = config.httpsPort === 443 ? '' : `:${config.httpsPort}`;
   console.log(`     Celulares:     https://local.gdtmidia.com.br${portSuffix}   (HTTPS ativo, certificado até ${tls.validTo.slice(0, 10)})`);
   console.log(`     Teste rápido:  https://local.gdtmidia.com.br${portSuffix}/health`);
+  console.log(`     Ajuda p/ celulares (Wi-Fi + instalar): https://local.gdtmidia.com.br${portSuffix}/ajuda`);
 } else {
   console.log('     ⚠️  HTTPS DESLIGADO — o app instalado nos celulares NÃO vai conseguir conectar (veja o log / GUIA-WINDOWS.md)');
   ips.forEach(ip => console.log(`     Celulares (só HTTP, sem PWA): http://${ip}:${config.port}`));

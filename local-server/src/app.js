@@ -10,6 +10,7 @@ import { businessRouter } from './routes/business.js';
 import { uploadRouter } from './routes/upload.js';
 import { syncRouter } from './routes/sync.js';
 import { statusRouter } from './routes/status.js';
+import { createPageInjector } from './html-inject.js';
 import { COLLECTIONS } from './db.js';
 
 export function createApp({ store, config, log, tls = () => null, engine = null, isLocalRequest }) {
@@ -68,18 +69,41 @@ export function createApp({ store, config, log, tls = () => null, engine = null,
 
   // Frontend estático (opcional) — SÓ as pastas públicas; nunca a raiz (tem credenciais em server/)
   if (config.frontendDir && fs.existsSync(path.join(config.frontendDir, 'pages'))) {
+    const injector = createPageInjector({ vendorDir: config.vendorDir, localAppMode: config.localAppMode, importMapJson: config.importMapJson });
+
+    // Páginas HTML: servidas com as adaptações do modo local (bibliotecas em /vendor, ajuda, import map).
+    // A nuvem (Vercel) serve os MESMOS arquivos sem nenhuma delas.
+    app.get(/^\/(pages\/.+\.html|index\.html)$/, (req, res, next) => {
+      const file = path.join(config.frontendDir, req.path);
+      if (!file.startsWith(path.join(config.frontendDir, path.sep)) || !fs.existsSync(file)) return next();
+      res.set('Cache-Control', 'no-cache').type('html').send(injector.inject(fs.readFileSync(file, 'utf8'), req.path));
+    });
+
     for (const d of ['css', 'js', 'pages', 'assets', 'shared']) {
       app.use(`/${d}`, express.static(path.join(config.frontendDir, d)));
     }
+    if (fs.existsSync(config.vendorDir)) app.use('/vendor', express.static(config.vendorDir, { maxAge: '7d' }));
+
     // PWA: sw.js e manifest.json precisam estar na RAIZ (escopo "/"), sempre revalidados
     for (const f of ['sw.js', 'manifest.json']) {
       app.get(`/${f}`, (_req, res) => {
         res.set('Cache-Control', 'no-cache');
-        if (f === 'manifest.json') res.type('application/manifest+json');
+        if (f === 'manifest.json') res.type('application/manifest+json'); else res.set('Service-Worker-Allowed', '/');
         res.sendFile(path.join(config.frontendDir, f));
       });
     }
+
+    // Raiz abre o app (login); /ajuda: passo a passo curto (Wi-Fi + instalação), pública e offline
     app.get('/', (_req, res) => res.redirect('/pages/login.html'));
+    app.get(['/ajuda', '/ajuda.html'], (_req, res) => {
+      const hasWifi = !!config.helpWifiName, hasPass = !!config.helpWifiPassword;
+      const esc = v => String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const html = fs.readFileSync(new URL('./routes/help-page.html', import.meta.url), 'utf8')
+        .replace('{{WIFI_STYLE}}', hasWifi ? '' : 'display:none').replace('{{WIFI_NAME}}', esc(config.helpWifiName))
+        .replace('{{WIFI_PASS_STYLE}}', hasPass ? '' : 'display:none').replace('{{WIFI_PASSWORD}}', esc(config.helpWifiPassword))
+        .replace('{{N_OPEN}}', hasWifi ? '2' : '1').replace('{{N_INSTALL}}', hasWifi ? '3' : '2');
+      res.set('Cache-Control', 'no-cache').type('html').send(html);
+    });
   }
 
   app.use((req, _res, next) => next(Object.assign(new Error('Rota não encontrada'), { status: 404 })));

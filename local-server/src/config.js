@@ -54,6 +54,16 @@ export function loadConfig(overrides = {}) {
     // Sincronização com o Firebase: DESLIGADA por padrão (evita que um banco de teste/desenvolvimento grave na
     // nuvem de produção por engano). No PC do evento: CLOUD_SYNC=1 no .env.
     cloudSync: overrides.cloudSync ?? env.CLOUD_SYNC === '1',
+    // Bibliotecas de terceiros (Tailwind, xlsx, qrcodejs, html5-qrcode) servidas pelo próprio servidor local:
+    // o app abre num celular novo SEM internet (as páginas apontariam para CDNs externos).
+    vendorDir: overrides.vendorDir ?? path.join(ROOT, 'vendor'),
+    // Página de ajuda /ajuda (nome da rede Wi-Fi do evento e, opcionalmente, a senha)
+    helpWifiName: String(overrides.helpWifiName ?? env.HELP_WIFI_NAME ?? ''),
+    helpWifiPassword: String(overrides.helpWifiPassword ?? env.HELP_WIFI_PASSWORD ?? ''),
+    // Chave de emergência do modo local total (etapa 1): LOCAL_APP_MODE=0 → as páginas usam a nuvem como antes
+    localAppMode: overrides.localAppMode ?? env.LOCAL_APP_MODE !== '0',
+    // Modo local total: as páginas servidas por aqui trocam api.js/firebase.js por versões que só falam com este servidor
+    importMapJson: overrides.importMapJson ?? JSON.stringify({ imports: { '/js/api.js': '/js/api-local.js', '/js/firebase.js': '/js/firebase-stub.js' } }),
     syncTickMs: Number(overrides.syncTickMs ?? env.SYNC_TICK_MS ?? 10_000),
     // PIN do painel /status quando aberto de OUTRO aparelho (no próprio PC não pede)
     statusPin: String(overrides.statusPin ?? env.STATUS_PIN ?? ''),

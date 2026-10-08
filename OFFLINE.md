@@ -200,6 +200,58 @@ Rodar `npm test` em máquina muito carregada pode estourar prazos de relógio; o
 
 ---
 
+# Acesso sem instalação prévia (modo local — etapa 2)
+
+Quando o app é aberto **pelo servidor local** (`https://local.gdtmidia.com.br` ou `http://localhost:8787`):
+- **A raiz `/` abre o app** (redireciona para o login) — basta digitar o endereço ou ler o QR da página de ajuda.
+- **Sem depender de internet para carregar:** Tailwind, xlsx, qrcodejs e html5-qrcode são servidos de `/vendor` (cópias em
+  `local-server/vendor/`); o injetor (`src/html-inject.js`) reescreve os `<script src="https://…">` **apenas nas páginas servidas
+  pelo servidor local**. Os arquivos do repositório — e portanto a nuvem/Vercel — **não mudam**.
+- **PWA instalável a partir da origem local** (manifest + service worker + ícones; o `sw.js` guarda `/vendor` e `/ajuda` em cache
+  **só nessa origem** — na nuvem nenhuma requisição nova).
+- **`/ajuda`**: página curta e pública (funciona offline) com Wi-Fi do evento (`HELP_WIFI_NAME`, opcionalmente
+  `HELP_WIFI_PASSWORD`), endereço + **QR Code**, como instalar no Android e no iPhone e "não abriu?". A tela de login ganha um
+  botãozinho "ℹ️ Ajuda".
+- Testes: `test/local-access.test.js` (raiz, nenhuma página com CDN externo, bibliotecas, ajuda, PWA, original intacto).
+
+## Modo local total (app aberto pelo servidor do evento)
+
+Quando a página é aberta por `https://local.gdtmidia.com.br` (ou `http://localhost:8787`), **todos os perfis** (admin, aprovador,
+fiscal, região, conselheiro) usam o servidor local como backend — sem Firestore, sem nuvem, sem internet.
+
+| Peça | O que faz |
+|---|---|
+| `js/api-local.js` | Mesmas exportações do `js/api.js`, mas via REST + `Authorization: Bearer` na **própria origem**. Listeners em tempo real viram **polling**: a cada 3 s consulta `GET /health` → `revision`; só rebaixa a coleção quando algo mudou e só chama o `onUpdate` se o conteúdo mudou (nada de re-render à toa). Pausa com a aba oculta. |
+| `js/firebase-stub.js` | Substitui `js/firebase.js`: qualquer uso do Firestore **falha alto** em vez de sair para a internet. |
+| Import map | O servidor injeta no `<head>` das páginas que serve: `/js/api.js → /js/api-local.js`, `/js/firebase.js → /js/firebase-stub.js`, e `window.__CAMPORI_LOCAL_APP=1`. A nuvem (Vercel) **não** recebe isso → comportamento idêntico ao de antes. |
+| `js/config.js` / `js/net.js` | Com a flag, o "servidor local" é a própria origem (qualquer porta) e **nunca** se sonda a nuvem; `isCloudReachable()` passa a testar o servidor local (o envio de comprovação do conselheiro depende dele). |
+| Gravações offline | Login, criar/editar usuários, regiões, unidades, participantes, requisitos, envios, revisões, disciplina e **upload** (`/upload` → `data/uploads`) gravam direto no SQLite local com `dirty=1`; a sincronização existente leva à nuvem depois. |
+| Servidor | Região pode editar o **próprio perfil** (`warCry`, `extraInfo`, `logoUrl`) via `PATCH /data/regions/:id` — nenhum outro campo/região. |
+
+**Kill switch:** `LOCAL_APP_MODE=0` no `.env` (e reiniciar) → o servidor para de injetar o import map; as páginas voltam a usar o
+Firestore, como antes. Requisitos do navegador: Chrome/Android ≥ 89, iOS Safari ≥ 16.4 (import maps).
+
+Testes: `test/local-mode.test.js` (cada função do `api-local.js` contra um servidor real, polling, "nenhuma requisição saiu do
+servidor local", kill switch, nuvem intocada), `test/net-local-app.test.js`, `test/config-url.test.js`.
+
+### Fila offline do Fiscal (modo local)
+
+Cada avaliação do Fiscal (`js/fiscalQueue.js`) é gravada **primeiro** no IndexedDB do aparelho (store `kv`, chaves `fiscalq:<userId>:<id>`;
+não toca na fila de scans do Conselheiro) e só então enviada a `POST /submissions/fiscal-suggestion`.
+
+- **Idempotência no servidor:** o item leva `clientId` (UUID do aparelho) e `evaluatedAt`. Reenviar o mesmo `clientId` não regrava nada
+  (não "des-aprova" o que o admin já revisou); avaliação **mais antiga** que a registrada é ignorada (`result: "superseded"`); nunca
+  duplica — sem `existingSubId` (ou com id que sumiu) o servidor reaproveita a avaliação do fiscal para o mesmo região/unidade + requisito.
+  Campos novos nos documentos: `fiscalClientId`, `fiscalEvaluatedAt` (a sincronização com a nuvem os leva como qualquer outro campo).
+- **Status por item:** 🕓 aguardando · ✅ enviada · ↪️ ignorada (já havia mais recente) · ❌ recusada (mensagem do servidor; não repete).
+- **Envio:** imediato (espera até 4 s e responde "guardado no aparelho" se não deu), automático ao voltar rede/foco e a cada 8 s com
+  backoff, e botão **🔄 Sincronizar agora**. 401 → fila intacta + aviso de sessão expirada. Pendente nunca é descartado; resolvidos somem em 24 h.
+- **Avisos na tela:** barra fixa com 🟢/🔴 do servidor local, contagem de pendentes, lista da fila, alerta de sessão expirada e de
+  navegador que não guarda dados (IndexedDB indisponível). O cartão do requisito mostra "🕓 Na fila: N pts" até o envio.
+- Só no modo local; na nuvem o fiscal segue pelo caminho de antes.
+
+Testes: `test/fiscal-queue.test.js` (servidor: idempotência, ordem, dedupe, validação; cliente: offline, resposta perdida, 401, 4xx, pendurado, poda).
+
 # Portal do Conselheiro — total da unidade = ranking
 
 O card **"✅ pts confirmados"** é a pontuação **total da unidade**, calculada pela **mesma função do ranking**

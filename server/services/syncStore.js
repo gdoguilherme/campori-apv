@@ -85,7 +85,12 @@ async function bootstrap({ db, user, withRanking = true, nowMs = Date.now() }) {
     ranking = _rankingCache.data;
   }
   const region = regions.find(r => r.id === regionId) || null;
-  return buildCounselorBootstrap({ user, unit, region, regions, participants, requirements, unitSubmissions, ...ranking, nowMs });
+  // pontos da REGIÃO (valem p/ todas as unidades): submissões da região sem unitId + descontos de disciplina (coleção pequena)
+  const [regionSubmissions, disciplinaryActions] = await Promise.all([
+    regionId ? db.collection('submissions').where('regionId', '==', regionId).get().then(docsOf).then(l => l.filter(s => !s.unitId)) : [],
+    ranking.disciplinaryActions || db.collection('disciplinaryActions').get().then(docsOf),   // reaproveita o cache de 60s do ranking
+  ]);
+  return buildCounselorBootstrap({ user, unit, region, regions, participants, requirements, unitSubmissions, regionSubmissions, ...ranking, disciplinaryActions, nowMs });
 }
 
 const _resetRankingCache = () => { _rankingCache = { at: 0, data: null }; };

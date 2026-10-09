@@ -4,6 +4,7 @@ import {
 } from './firebase.js';
 import { CLOUD_URL, TIMEOUTS } from './config.js';
 import { fetchJson, serverFetch, HttpError, NetError } from './net.js';
+import { normalizeUniformInspection, computeUniformPoints } from '../shared/uniforme.js';
 import { reqFilledBy, computeUnitScores, computeStars, findQrDuplicate, DISCIPLINE_POINTS } from '../shared/scoring.js';
 
 // Regras de pontuação vivem em shared/scoring.js (também usado pelo servidor local offline)
@@ -292,6 +293,31 @@ export async function doFiscalSuggestion(req, regionId, totalPts, subItemScores,
     });
   }
   toast(`✅ ${req.name} — ${totalPts} pts (aguardando aprovação)`);
+}
+
+// Inspeção de uniforme (nuvem): mesma regra única de shared/uniforme.js; fica PENDENTE para o admin aprovar.
+// Reavaliar a mesma unidade atualiza a submission existente (a mais recente vale, sem duplicar pontos).
+export async function doUniformInspection(req, unit, inspection, currentUser, existingSubId = null) {
+  const norm = normalizeUniformInspection(inspection);
+  const pts = computeUniformPoints(norm.erros, req).pontos;
+  const baseData = {
+    requirementPoints: pts, subItemScores: null, subItemPcts: null, status: 'pending', fiscalSuggestion: true,
+    notes: `Avaliado por: ${currentUser.name}`, submittedAt: serverTimestamp(),
+    submittedBy: currentUser.username, submittedByName: currentUser.name,
+    uniformInspection: { ...norm, avaliadorId: currentUser.id, avaliadorNome: currentUser.name, avaliadoEm: Date.now() }
+  };
+  if (existingSubId) {
+    await updateDoc(doc(db, 'submissions', existingSubId), baseData);
+  } else {
+    await addDoc(collection(db, 'submissions'), {
+      regionId: unit.regionId, regionName: rname(unit.regionId), unitId: unit.id,
+      requirementId: req.id, requirementName: req.name, requirementCategory: req.category,
+      competitionCategory: req.competitionCategory || 'Ambos', proofUrl: null, source: 'judge',
+      requirementDeadlineSnapshot: req.deadline || null, ...baseData
+    });
+  }
+  toast(`✅ ${req.name} — ${pts} pts (aguardando aprovação)`);
+  return { points: pts };
 }
 
 // ── REQUIREMENTS ──────────────────────────────────────────────

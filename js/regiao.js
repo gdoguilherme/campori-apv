@@ -149,7 +149,7 @@ function vPortal() {
   const userCompCat = user.competitionCategory || null;
   const visibleReqs = S.requirements.filter(r =>
     r.active !== false &&
-    reqFilledBy(r) !== 'conselheiro' &&
+    reqFilledBy(r) !== 'conselheiro' && r.inspection !== 'uniforme' &&
     (!userCompCat || !r.competitionCategory || r.competitionCategory === 'Ambos' || r.competitionCategory === userCompCat)
   );
   const totalPossible = visibleReqs.reduce((a, r) => a + r.points, 0);

@@ -4,6 +4,7 @@ import { ADMIN_ROLES } from '../auth.js';
 import {
   computeUnitScores, computeStars, reqFilledBy, isDeadlinePassed, DISCIPLINE_POINTS
 } from '../../../shared/scoring.js';
+import { isUniformReq, normalizeUniformInspection, computeUniformPoints } from '../../../shared/uniforme.js';
 
 export function businessRouter({ store, auth }) {
   const r = express.Router();
@@ -75,14 +76,26 @@ export function businessRouter({ store, auth }) {
   //  · `evaluatedAt` (ms): se já existe avaliação MAIS RECENTE para o mesmo item, a antiga não sobrescreve (result: 'superseded');
   //  · nunca duplica: sem `existingSubId` (ou com id que sumiu), procura a avaliação do fiscal para o mesmo região/unidade + requisito.
   r.post('/submissions/fiscal-suggestion', requireAuth(['judge', ...ADMIN_ROLES]), (req, res) => {
-    const { requirementId, regionId, unitId = null, points, subItemScores = null, subItemPcts = null, existingSubId = null, clientId = null, evaluatedAt = null } = req.body || {};
-    if (typeof points !== 'number' || points < 0) throw httpError(400, 'points inválido');
+    const { requirementId, unitId = null, subItemScores = null, subItemPcts = null, existingSubId = null, clientId = null, evaluatedAt = null, uniformInspection = null } = req.body || {};
+    let { regionId, points } = req.body || {};
+    if (uniformInspection === null && (typeof points !== 'number' || points < 0)) throw httpError(400, 'points inválido');
     if (clientId !== null && (typeof clientId !== 'string' || clientId.length > 80)) throw httpError(400, 'clientId inválido');
     const evalAt = Number.isFinite(Number(evaluatedAt)) && evaluatedAt !== null ? Number(evaluatedAt) : null;
     const user = req.user;
     const out = store.tx(() => {
       const req_ = store.get('requirements', requirementId);
       if (!req_) throw httpError(404, 'Requisito não encontrado');
+      // Inspeção de uniforme: pontos calculados AQUI pela regra única (shared/uniforme.js), sempre no nível da unidade
+      let inspection = null;
+      if (uniformInspection !== null) {
+        if (!isUniformReq(req_)) throw httpError(422, 'Este requisito não é uma Inspeção de uniforme');
+        const unit = unitId ? store.get('units', unitId) : null;
+        if (!unit) throw httpError(422, 'Selecione a unidade inspecionada');
+        regionId = unit.regionId;
+        const norm = normalizeUniformInspection(uniformInspection);
+        points = computeUniformPoints(norm.erros, req_).pontos;
+        inspection = { ...norm, avaliadorId: user.id, avaliadorNome: user.name, avaliadoEm: evalAt ?? Date.now() };
+      } else if (isUniformReq(req_)) throw httpError(422, 'A Inspeção de uniforme é preenchida na tela própria');
       let target = existingSubId ? store.get('submissions', existingSubId) : null;
       if (target && target.requirementId !== requirementId) target = null; // id de outro requisito: ignora
       if (!target) {
@@ -95,7 +108,8 @@ export function businessRouter({ store, auth }) {
         requirementPoints: points, subItemScores, subItemPcts, status: 'pending', fiscalSuggestion: true,
         notes: `Avaliado por: ${user.name}`, submittedAt: { __serverTimestamp: true },
         submittedBy: user.username, submittedByName: user.name,
-        ...(clientId ? { fiscalClientId: clientId } : {}), ...(evalAt !== null ? { fiscalEvaluatedAt: evalAt } : {})
+        ...(clientId ? { fiscalClientId: clientId } : {}), ...(evalAt !== null ? { fiscalEvaluatedAt: evalAt } : {}),
+        ...(inspection ? { uniformInspection: inspection } : {})
       };
       if (target) return { ...store.update('submissions', target.id, base), result: 'updated' };
       return {

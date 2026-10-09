@@ -4,7 +4,7 @@
 // A lista e a VERSION são geradas por `node scripts/build-sw.mjs` (rodar antes de cada deploy).
 
 /* BUILD:START */
-const VERSION = 'f5377b081b';
+const VERSION = 'd707cc3eff';
 const SHELL = [
   "/assets/favicon/favicon-16.png",
   "/assets/favicon/favicon-180.png",
@@ -15,6 +15,10 @@ const SHELL = [
   "/assets/logo-integros-completo.png",
   "/assets/logo-integros-selo.png",
   "/assets/pwa/apple-touch-icon.png",
+  "/assets/uniforme/bandeira-globo-opcionais.png",
+  "/assets/uniforme/bolsos-lenco.png",
+  "/assets/uniforme/faixa-calcados.png",
+  "/assets/uniforme/mangas.png",
   "/css/avt.css",
   "/css/base.css",
   "/css/dbv.css",
@@ -28,6 +32,7 @@ const SHELL = [
   "/js/firebase.js",
   "/js/fiscal.js",
   "/js/fiscalQueue.js",
+  "/js/inspecao-uniforme.js",
   "/js/net.js",
   "/js/offlineDb.js",
   "/js/pwa.js",
@@ -38,11 +43,13 @@ const SHELL = [
   "/pages/admin.html",
   "/pages/conselheiro.html",
   "/pages/fiscal.html",
+  "/pages/inspecao-uniforme.html",
   "/pages/login.html",
   "/pages/regiao/avt.html",
   "/pages/regiao/dbv.html",
   "/shared/scoring.js",
-  "/shared/sync.js"
+  "/shared/sync.js",
+  "/shared/uniforme.js"
 ];
 /* BUILD:END */
 

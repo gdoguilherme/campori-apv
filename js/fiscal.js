@@ -179,10 +179,10 @@ function vSelectRegion() {
 
   // Requisitos Regional/Fiscal são avaliados por região; Conselheiro, por unidade
   const evalReqsRegion = S.requirements.filter(r =>
-    r.active !== false && (!cat || r.category === cat) && reqFilledBy(r) !== 'conselheiro'
+    r.active !== false && !r.inspection && (!cat || r.category === cat) && reqFilledBy(r) !== 'conselheiro'
   );
   const evalReqsUnit = S.requirements.filter(r =>
-    r.active !== false && (!cat || r.category === cat) && reqFilledBy(r) === 'conselheiro'
+    r.active !== false && !r.inspection && (!cat || r.category === cat) && reqFilledBy(r) === 'conselheiro'
   );
   const totalPossible     = evalReqsRegion.reduce((a, r) => a + r.points, 0);
   const totalPossibleUnit = evalReqsUnit.reduce((a, r) => a + r.points, 0);
@@ -199,6 +199,9 @@ function vSelectRegion() {
         </div>
         <div style="display:flex;gap:.5rem;align-items:center;">
           <img src="/assets/logo-apv.png" alt="APV" style="height:1.3rem;width:auto;object-fit:contain;opacity:.85;">
+          <a href="/pages/inspecao-uniforme.html"
+            style="background:rgba(0,0,0,.2);border:none;color:#cfe8ca;text-decoration:none;
+            padding:.375rem .75rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">👔 Inspeção de Uniforme</a>
           <button onclick="W.openQrList()"
             style="background:rgba(0,0,0,.2);border:none;color:#cfe8ca;
             padding:.375rem .75rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔲 QR Codes</button>
@@ -289,7 +292,7 @@ function vScore() {
   const scope  = isUnit ? S.units.find(u => u.id === S.fiscalUnitId) : S.regions.find(r => r.id === S.fiscalRegionId);
 
   const reqs = S.requirements.filter(r =>
-    r.active !== false &&
+    r.active !== false && !r.inspection &&
     (!cat || r.category === cat) &&
     (isUnit ? reqFilledBy(r) === 'conselheiro' : reqFilledBy(r) !== 'conselheiro')
   );

@@ -175,6 +175,15 @@ export async function doFiscalSuggestion(req, regionId, totalPts, subItemScores,
   toast(`✅ ${req.name} — ${totalPts} pts (aguardando aprovação)`);
 }
 
+export async function doUniformInspection(req, unit, inspection, currentUser, existingSubId = null) {
+  const sub = await apiFetch('/submissions/fiscal-suggestion', {
+    method: 'POST',
+    body: { requirementId: req.id, unitId: unit.id, regionId: unit.regionId, uniformInspection: inspection, existingSubId: existingSubId || null }
+  });
+  toast(`✅ ${req.name} — ${sub.requirementPoints} pts (aguardando aprovação)`);
+  return { points: sub.requirementPoints };
+}
+
 export async function deleteSubmission(id) {
   await apiFetch(`/data/submissions/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }

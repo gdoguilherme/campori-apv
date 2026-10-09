@@ -4,6 +4,7 @@
 // dentro da sua própria transação. A cópia em server/shared/ é gerada por
 // `node scripts/sync-shared.mjs` (o Docker do Fly.io só enxerga a pasta server/).
 
+import { isUniformReq } from './uniforme.js';
 import { reqFilledBy, evaluateQrScan, findQrDuplicate, computeUnitScores, tsSeconds } from './scoring.js';
 
 export const SCAN_BATCH_MAX = 100;
@@ -150,10 +151,13 @@ export function buildCounselorBootstrap({ user, unit, region, regions, participa
   const cat = region?.competitionCategory || null;
   const REQ_FIELDS = ['id', 'name', 'description', 'points', 'category', 'areaAtuacao', 'code', 'deadline', 'order', 'filledBy', 'competitionCategory', 'active'];
   const regionReqs = (requirements || [])
-    .filter(r => r.active !== false && reqFilledBy(r) !== 'conselheiro' &&
+    .filter(r => r.active !== false && reqFilledBy(r) !== 'conselheiro' && !isUniformReq(r) &&
       (!cat || !r.competitionCategory || r.competitionCategory === 'Ambos' || r.competitionCategory === cat))
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     .map(r => ({ ...pick(r, REQ_FIELDS), filledBy: reqFilledBy(r) }));
+  // Inspeção de uniforme: pontua só a UNIDADE (avaliada pelo Fiscal na tela própria) — não é "da região" nem enviada pelo conselheiro
+  const inspectionReqs = (requirements || []).filter(r => r.active !== false && isUniformReq(r))
+    .map(r => ({ ...pick(r, ['id', 'name', 'points', 'category', 'order']), filledBy: 'fiscal', inspection: 'uniforme' }));
   const regionId = unit?.regionId || region?.id || null;
   const regionSubs = (regionSubmissions || []).filter(s => !s.unitId && s.regionId === regionId)
     .map(s => pick(s, ['id', 'requirementId', 'status', 'requirementPoints', 'submittedAt', 'reviewedAt', 'rejectionReason', 'source', 'fiscalSuggestion', 'regionId']));
@@ -169,7 +173,7 @@ export function buildCounselorBootstrap({ user, unit, region, regions, participa
     regions: (regions || (region ? [region] : [])).map(r => pick(r, ['id', 'name'])), // nomes p/ "clube amigo" de outras regiões
     participants: (participants || []).map(p => pick(p, ['id', 'name', 'club', 'regionId', 'competitionCategory', 'unitId'])),
     requirements: reqs,
-    regionRequirements: regionReqs, regionSubmissions: regionSubs, disciplinaryActions: discipline,
+    inspectionRequirements: inspectionReqs, regionRequirements: regionReqs, regionSubmissions: regionSubs, disciplinaryActions: discipline,
     submissions: (unitSubmissions || []).map(s => pick(s, ['id', 'requirementId', 'status', 'requirementPoints', 'submittedAt', 'rejectionReason', 'source', 'qrVariantLabel', 'unitId', 'qrConflict'])),
     // ranking anônimo (só pontos) — mesmo que o login/portais já exibem
     ranking: allSubmissions && allUnits

@@ -13,6 +13,7 @@ import {
   CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS, AREAS_ATUACAO, FILLED_BY
 } from './api.js';
 import { loadIdentifiedRanking, rankingStampHtml } from './ranking.js';
+import { UNIFORM_CATEGORIES, buildUniformCsv, computeUniformPoints } from '../shared/uniforme.js';
 
 // ── ESTADO ────────────────────────────────────────────────────
 const S = {
@@ -181,6 +182,7 @@ function vAdmin() {
           <span>${t.label}</span>
           ${t.count ? `<span class="count">${t.count}</span>` : ''}
         </button>`).join('')}
+        ${isAdmin() ? `<a class="sidebar-link" href="/pages/inspecao-uniforme.html" style="text-decoration:none;"><span>👔 Inspeção de Uniforme</span></a>` : ''}
       </div>
       <div style="padding:.75rem;display:flex;flex-direction:column;gap:.5rem;border-top:1px solid rgba(255,255,255,.12);">
         <button onclick="W.openChangePwd()"
@@ -219,6 +221,39 @@ function vAdmin() {
 }
 
 // ── TAB: FILA ─────────────────────────────────────────────────
+// Detalhe da Inspeção de Uniforme (erros por categoria + observações) para a revisão do admin
+function uniformDetails(sub) {
+  const ui = sub.uniformInspection;
+  if (!ui) return '';
+  const req = S.requirements.find(r => r.id === sub.requirementId);
+  const t = computeUniformPoints(ui.erros, req);
+  const rows = UNIFORM_CATEGORIES.map(c => {
+    const n = Math.max(0, Math.floor(Number(ui.erros?.[c.key])) || 0);
+    const o = ui.observacoes?.[c.key];
+    return `<tr style="border-top:1px solid #e9d5ff;"><td style="padding:.25rem .4rem;">${c.label}${c.optional ? ' <span style="color:#94a3b8;">(opcional)</span>' : ''}</td>
+      <td style="padding:.25rem .4rem;text-align:center;font-weight:800;color:${n && !c.optional ? '#b91c1c' : '#334155'};">${n}</td>
+      <td style="padding:.25rem .4rem;color:#64748b;">${o ? escHtml(o) : ''}</td></tr>`;
+  }).join('');
+  return `<div style="background:#faf5ff;border-radius:.625rem;padding:.625rem .75rem;margin-top:.5rem;">
+    <div style="font-size:.75rem;font-weight:700;color:#6b21a8;margin-bottom:.25rem;">👔 Inspeção de uniforme · ${t.totalErros} erro(s) · −${t.descontados} pts → <strong>${sub.requirementPoints ?? t.pontos} pts</strong></div>
+    <div style="font-size:.7rem;color:#7c3aed;margin-bottom:.3rem;">${escHtml(ui.avaliadorNome || sub.submittedByName || '')}${ui.avaliadoEm ? ' · ' + new Date(ui.avaliadoEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : ''}${sub.unitId ? ' · ' + escHtml(S.units.find(u => u.id === sub.unitId)?.name || '') : ''}</div>
+    <table style="width:100%;font-size:.76rem;border-collapse:collapse;"><thead><tr style="color:#6b21a8;text-align:left;"><th style="padding:.2rem .4rem;">Categoria</th><th style="padding:.2rem .4rem;">Erros</th><th style="padding:.2rem .4rem;">Observação</th></tr></thead><tbody>${rows}</tbody></table>
+  </div>`;
+}
+const escHtml = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function exportUniformCsv() {
+  const csv = buildUniformCsv({
+    submissions: S.submissions, units: S.units, regions: S.regions, requirements: S.requirements,
+    fmtDateTime: ms => new Date(ms).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+  });
+  if (csv.split('\r\n').length < 2) { toast('Nenhuma inspeção de uniforme registrada ainda', 'error'); return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `inspecoes-uniforme-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
 function tQueue() {
   const pending = [...S.submissions]
     .filter(s => s.status === 'pending')
@@ -252,6 +287,7 @@ function tQueue() {
               </div>
               ${sub.notes ? `<div style="background:#f8fafc;border-radius:.625rem;padding:.5rem .75rem;font-size:.82rem;color:#475569;margin-top:.5rem;">"${sub.notes}"</div>` : ''}
               ${subItemDetails(sub)}
+              ${uniformDetails(sub)}
             </div>
             <span style="background:#f1f5f9;color:#475569;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;white-space:nowrap;flex-shrink:0;">${sub.requirementCategory}</span>
           </div>
@@ -323,6 +359,8 @@ function tHistory() {
       <div style="display:flex;gap:.375rem;">
         <button onclick="W.exportExcel()"
           style="background:#0D2B6E;color:#fff;border:none;padding:.375rem .875rem;border-radius:.625rem;font-size:.78rem;font-weight:700;cursor:pointer;">📊 Excel</button>
+        <button onclick="W.exportUniformCsv()"
+          style="background:#6b21a8;color:#fff;border:none;padding:.375rem .875rem;border-radius:.625rem;font-size:.78rem;font-weight:700;cursor:pointer;">👔 CSV Uniforme</button>
         <button onclick="window.print()"
           style="background:#1e3a8a;color:#fff;border:none;padding:.375rem .875rem;border-radius:.625rem;font-size:.78rem;font-weight:700;cursor:pointer;">🖨️ Imprimir</button>
       </div>
@@ -364,6 +402,7 @@ function tHistory() {
             ${sub.rejectionReason ? `<div style="font-size:.78rem;color:#dc2626;margin-bottom:.5rem;background:#fff1f1;padding:.375rem .625rem;border-radius:.5rem;">Motivo: ${sub.rejectionReason}</div>` : ''}
             ${sub.notes ? `<div style="background:#f8fafc;border-radius:.5rem;padding:.4rem .625rem;font-size:.78rem;color:#475569;margin-bottom:.5rem;">"${sub.notes}"</div>` : ''}
             ${subItemDetails(sub)}
+            ${uniformDetails(sub)}
             <div style="display:flex;gap:.5rem;margin-top:.625rem;">
               ${sub.status !== 'pending'
                 ? `<button onclick="W.reopen('${sub.id}')"
@@ -860,6 +899,17 @@ function mReqForm() {
             { v: 'conselheiro', l: '🏕️ Conselheiro' },
             { v: 'fiscal', l: '⚖️ Só Fiscal' }
           ], reqFilledBy(r))}</div>
+        </div>
+        <div style="border:1.5px solid #e9d5ff;border-radius:.875rem;padding:.875rem;background:#faf5ff;">
+          <label style="display:flex;align-items:center;gap:.6rem;font-size:.88rem;font-weight:700;color:#6b21a8;cursor:pointer;">
+            <input type="checkbox" id="rq-uniform" ${r.inspection === 'uniforme' ? 'checked' : ''} onchange="W.toggleUniform(this.checked)" style="width:1.1rem;height:1.1rem;">
+            👔 Inspeção de uniforme (avaliada pelo Fiscal na tela própria)
+          </label>
+          <div style="display:flex;align-items:center;gap:.6rem;margin-top:.6rem;">
+            <span style="font-size:.8rem;color:#475569;">Pontos descontados por erro:</span>
+            <input id="rq-uni-penalty" type="number" min="0" step="0.5" value="${r.uniformPenalty ?? 1}" style="width:5rem;border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.5rem;text-align:center;">
+          </div>
+          <div style="font-size:.72rem;color:#7c3aed;margin-top:.4rem;">Pontos da unidade = máx − erros × desconto (mínimo 0). O máximo é o campo “Pontuação” abaixo (sugestão: 10). “Opcionais” não descontam. Vale só para a unidade inspecionada.</div>
         </div>
         <div style="font-size:.72rem;color:#94a3b8;margin-top:-.5rem;">
           Regional: aparece no portal da região, pontua para todas as unidades. Conselheiro: aparece no portal do conselheiro (sem distinção de modalidade), pontua só para a unidade. Fiscal: só o Fiscal de Prova avalia.
@@ -1394,6 +1444,7 @@ window.W = {
   openPhoto(url)   { S.photoUrl = url; S.modal = 'photo'; render(); },
   filterStatus(st) { S.filterStatus = st; render(); },
   exportExcel()    { exportExcel(); },
+  exportUniformCsv() { exportUniformCsv(); },
 
   approve(id) { apiReview(id, 'approved', '', S.user).then(() => toast('✅ Aprovado!')); },
   reject(id)  {
@@ -1454,6 +1505,11 @@ window.W = {
     S.editingReq = { ...S.editingReq, qrVariants: current };
     render();
   },
+  toggleUniform(on) {
+    if (!on) return;
+    const set = (id, v, force) => { const el = document.getElementById(id); if (el && (force || !el.value)) el.value = v; };
+    set('rq-filledby', 'fiscal', true); set('rq-name', 'Inspeção de uniforme'); set('rq-pts', 10); set('rq-code', 'inspecao-uniforme');
+  },
   async saveReq() {
     const name     = document.getElementById('rq-name')?.value?.trim();
     const code     = document.getElementById('rq-code')?.value?.trim() || name?.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -1462,7 +1518,9 @@ window.W = {
     const phase    = document.getElementById('rq-phase')?.value;
     const compCat  = document.getElementById('rq-compcat')?.value || 'Ambos';
     const areaAtuacao = document.getElementById('rq-areaatuacao')?.value || '';
-    const filledBy = document.getElementById('rq-filledby')?.value || 'regional';
+    const uniform  = !!document.getElementById('rq-uniform')?.checked;
+    const uniPenalty = Math.max(0, Number(document.getElementById('rq-uni-penalty')?.value) || 0);
+    const filledBy = uniform ? 'fiscal' : (document.getElementById('rq-filledby')?.value || 'regional');
     const activeEl = document.getElementById('rq-active');
     const active   = activeEl ? activeEl.checked : true;
     const rows     = [...document.querySelectorAll('#subitems-list .sub-item-row')];
@@ -1488,8 +1546,9 @@ window.W = {
         ...(S.editingReq?.id ? { id: S.editingReq.id } : {}),
         name, code, description: desc || '', category: cat, phase, points: pts,
         competitionCategory: compCat, areaAtuacao, filledBy,
-        subItems: subItems.length > 0 ? subItems : null,
-        qrVariants: qrVariants.length > 0 ? qrVariants : null, active
+        subItems: !uniform && subItems.length > 0 ? subItems : null,
+        qrVariants: !uniform && qrVariants.length > 0 ? qrVariants : null, active,
+        inspection: uniform ? 'uniforme' : null, uniformPenalty: uniform ? uniPenalty : null
       }, S.requirements.length);
       S.modal = null; S.editingReq = null;
       toast('Requisito salvo! ✅');

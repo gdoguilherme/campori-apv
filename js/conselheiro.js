@@ -30,6 +30,7 @@ const S = {
   participants: [],
   requirements: [],
   submissions: [],     // submissions da unidade (confirmadas pelo servidor)
+  inspectionRequirements: [], // Inspeção de uniforme (pontua só a unidade; avaliada pelo Fiscal)
   regionRequirements: [], // requisitos que valem para toda a região (Regional / Só Fiscal), da modalidade dela
   regionSubmissions: [],  // submissões no nível da região (sem unitId): pontuam TODAS as unidades da região
   disciplinary: [],       // descontos de disciplina que atingem a unidade ou a região dela
@@ -88,6 +89,7 @@ function applySnapshot(snap) {
   S.requirements = d?.requirements || [];
   S.submissions = d?.submissions || [];
   S.regionRequirements = d?.regionRequirements || [];
+  S.inspectionRequirements = d?.inspectionRequirements || [];
   S.regionSubmissions = d?.regionSubmissions || [];
   S.disciplinary = d?.disciplinaryActions || [];
   S.ranking = d?.ranking || [];
@@ -149,7 +151,8 @@ function vPortal() {
   // Requisitos do tipo Conselheiro — sem distinção de modalidade (unidades são mistas)
   const visibleReqs = S.requirements.filter(r => r.active !== false && reqFilledBy(r) === 'conselheiro');
   const regionPossible = S.regionRequirements.reduce((a, r) => a + (r.points || 0), 0);
-  const totalPossible = visibleReqs.reduce((a, r) => a + (r.points || 0), 0) + regionPossible;   // da unidade + os que valem da região
+  const inspectionPossible = S.inspectionRequirements.reduce((a, r) => a + (r.points || 0), 0);
+  const totalPossible = visibleReqs.reduce((a, r) => a + (r.points || 0), 0) + inspectionPossible + regionPossible;   // da unidade + os que valem da região
 
   // Submission que representa o requisito no card: aprovada > pendente > mais recente.
   // Registros "substituídos" (scan de QR que perdeu para um mais antigo de outro aparelho)
@@ -243,6 +246,16 @@ function vPortal() {
             <p style="font-weight:600;margin:.5rem 0 0;">${S.snapshot ? 'Nenhum requisito de Conselheiro cadastrado ainda' : 'Dados ainda não baixados. Conecte-se ao servidor ao menos uma vez.'}</p>
            </div>`
         : visibleReqs.map(req => reqCard(req, subByReq[req.id], tc, queueByReq[req.id])).join('')}
+      ${S.inspectionRequirements.map(r => {
+        const sub = subByReq[r.id];
+        const [bg, fg, txt] = sub?.status === 'approved' ? ['#d1fae5', '#065f46', `✅ Aprovado · ${sub.requirementPoints ?? 0} pts recebidos`]
+          : sub?.status === 'pending' ? ['#fef3c7', '#92400e', '⏳ Aguardando aprovação'] : ['#f1f5f9', '#64748b', 'Ainda não avaliado pelo Fiscal'];
+        return `<div class="inspection-req" style="background:#fff;border-radius:1rem;border:1px solid #e2e8f0;border-left:4px solid #7c3aed;padding:.8rem 1rem;">
+          <div style="display:flex;gap:.375rem;margin-bottom:.4rem;"><span style="background:#dbeafe;color:#1d4ed8;font-size:.68rem;font-weight:700;padding:.15rem .55rem;border-radius:999px;">até ${r.points} pts</span>
+          <span style="background:#ede9fe;color:#5b21b6;font-size:.68rem;font-weight:700;padding:.15rem .55rem;border-radius:999px;">👔 Avaliado pelo Fiscal</span></div>
+          <div style="font-weight:700;color:#1e293b;font-size:.9rem;">${esc(r.name)}</div>
+          <div style="margin-top:.45rem;"><span style="background:${bg};color:${fg};font-size:.76rem;font-weight:700;padding:.25rem .7rem;border-radius:999px;display:inline-block;">${txt}</span></div></div>`;
+      }).join('')}
     </div>
 
     ${regionSection(bd.region)}

@@ -14,6 +14,7 @@ import {
 } from './api.js';
 import { loadIdentifiedRanking, rankingStampHtml } from './ranking.js';
 import { UNIFORM_CATEGORIES, buildUniformCsv, computeUniformPoints } from '../shared/uniforme.js';
+import { dedupeDisciplinaryActions, findRecentSameInfraction, DISCIPLINE_DUP_WINDOW_MS } from '../shared/scoring.js';
 
 // ── ESTADO ────────────────────────────────────────────────────
 const S = {
@@ -825,8 +826,16 @@ function tUnits() {
 // ── TAB: DISCIPLINA ───────────────────────────────────────────
 function tDiscipline() {
   const sorted = [...S.disciplinaryActions].sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  const dupIds = new Set(dedupeDisciplinaryActions(S.disciplinaryActions).duplicates.map(d => d.id));   // lançada local + nuvem: não soma duas vezes
+  // mesma infração (alvo + motivo) na mesma origem em < 10 min: ambas contam — avisa para o admin conferir
+  const near = sorted.filter((d, i) => sorted.slice(i + 1).some(o => !dupIds.has(d.id) && !dupIds.has(o.id) && o.targetType === d.targetType && o.targetId === d.targetId &&
+    findRecentSameInfraction([o], { targetType: d.targetType, targetId: d.targetId, reason: d.reason }, (d.createdAt?.seconds || 0) * 1000, DISCIPLINE_DUP_WINDOW_MS)));
   return `
   <div>
+    ${near.length ? `<div style="background:#fffbeb;border:1.5px solid #f59e0b;color:#92400e;border-radius:.75rem;padding:.6rem .8rem;font-size:.82rem;margin-bottom:.75rem;">
+      ⚠️ <strong>Mesma infração registrada mais de uma vez em menos de 10 minutos</strong> (${[...new Set(near.map(d => d.targetName || d.targetId))].join(', ')}). Confira — as duas descontam 5 pts. Se foi engano, exclua uma.</div>` : ''}
+    ${dupIds.size ? `<div style="background:#eff6ff;border:1.5px solid #93c5fd;color:#1e40af;border-radius:.75rem;padding:.6rem .8rem;font-size:.82rem;margin-bottom:.75rem;">
+      ℹ️ ${dupIds.size} lançamento(s) igual(is) feito(s) no servidor local e na nuvem foram contados <strong>uma vez só</strong> (marcados abaixo).</div>` : ''}
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
       <span style="font-weight:800;color:#1e293b;">Disciplina (${sorted.length})</span>
       <button onclick="W.openDisciplineForm()"
@@ -843,7 +852,8 @@ function tDiscipline() {
                 <span style="background:${d.targetType === 'region' ? '#dbeafe' : '#fef3c7'};color:${d.targetType === 'region' ? '#1d4ed8' : '#92400e'};font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">
                   ${d.targetType === 'region' ? '🗺️ Região inteira' : '🏕️ Unidade'}
                 </span>
-                <span style="background:#fee2e2;color:#991b1b;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">-${d.points || 5} pts</span>
+                <span style="background:#fee2e2;color:#991b1b;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;${dupIds.has(d.id) ? 'text-decoration:line-through;opacity:.6;' : ''}">-${d.points || 5} pts</span>
+                ${dupIds.has(d.id) ? '<span style="background:#dbeafe;color:#1e40af;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">duplicada (local × nuvem) — não soma</span>' : ''}
               </div>
               <div style="font-weight:700;color:#1e293b;">${d.targetName || d.targetId}</div>
               <div style="font-size:.8rem;color:#64748b;margin-top:.15rem;">${d.reason}</div>
@@ -1826,6 +1836,7 @@ window.W = {
 
   // ── Disciplina ─────────────────────────────────────────────
   openDisciplineForm() {
+    S.disciplineClientId = (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `c${Date.now()}${Math.random().toString(36).slice(2, 10)}`);   // um id por formulário: clique duplo/reenvio não duplica
     S.disciplineTargetType = 'region';
     S.modal = 'discipline-form'; render();
   },
@@ -1838,12 +1849,25 @@ window.W = {
     const targetName = type === 'region'
       ? S.regions.find(r => r.id === targetId)?.name
       : S.units.find(u => u.id === targetId)?.name;
+    if (S.loading) return;
+    const recent = findRecentSameInfraction(S.disciplinaryActions, { targetType: type, targetId, reason });
+    let confirmDuplicate = false;
+    if (recent) {
+      const mins = Math.max(0, Math.round((Date.now() - (recent.createdAt?.seconds || 0) * 1000) / 60000));
+      if (!confirm(`A mesma infração (mesmo alvo e motivo) já foi registrada há ${mins} min por ${recent.createdByName || recent.createdBy || 'alguém'}.\n\nRegistrar mesmo assim? O desconto de 5 pts seria aplicado de novo.`)) return;
+      confirmDuplicate = true;
+    }
     S.loading = true; render();
     try {
-      await createDisciplinaryAction({ targetType: type, targetId, targetName, reason }, S.user);
+      try {
+        await createDisciplinaryAction({ targetType: type, targetId, targetName, reason, clientId: S.disciplineClientId, confirmDuplicate }, S.user);
+      } catch (e) {
+        if (e.code === 'DUPLICATE_RECENT' && confirm(e.message)) await createDisciplinaryAction({ targetType: type, targetId, targetName, reason, clientId: S.disciplineClientId, confirmDuplicate: true }, S.user);
+        else throw e;
+      }
       toast('⚠️ Infração registrada.', 'info');
       S.modal = null;
-    } catch (e) { toast(e.message || 'Erro ao registrar.', 'error'); }
+    } catch (e) { if (e.code !== 'DUPLICATE_RECENT') toast(e.message || 'Erro ao registrar.', 'error'); }
     S.loading = false; render();
   },
   deleteDiscipline(id) {

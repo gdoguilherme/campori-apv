@@ -5,7 +5,7 @@
 // `node scripts/sync-shared.mjs` (o Docker do Fly.io só enxerga a pasta server/).
 
 import { isUniformReq } from './uniforme.js';
-import { reqFilledBy, evaluateQrScan, findQrDuplicate, computeUnitScores, tsSeconds } from './scoring.js';
+import { reqFilledBy, evaluateQrScan, findQrDuplicate, computeUnitScores, tsSeconds, dedupeDisciplinaryActions } from './scoring.js';
 
 export const SCAN_BATCH_MAX = 100;
 const CLOCK_SKEW_MS = 5 * 60_000;      // scanTimestamp "do futuro" além disso é limitado ao agora
@@ -162,7 +162,7 @@ export function buildCounselorBootstrap({ user, unit, region, regions, participa
   const regionSubs = (regionSubmissions || []).filter(s => !s.unitId && s.regionId === regionId)
     .map(s => pick(s, ['id', 'requirementId', 'status', 'requirementPoints', 'submittedAt', 'reviewedAt', 'rejectionReason', 'source', 'fiscalSuggestion', 'regionId']));
   // descontos de disciplina que atingem esta unidade (a dela ou a da região inteira); sem o motivo
-  const discipline = (disciplinaryActions || [])
+  const discipline = dedupeDisciplinaryActions(disciplinaryActions || []).kept   // mesma infração lançada local + nuvem conta uma vez (igual ao ranking)
     .filter(d => (d.targetType === 'unit' && d.targetId === unit?.id) || (d.targetType === 'region' && d.targetId === regionId))
     .map(d => pick(d, ['id', 'targetType', 'targetId', 'points', 'createdAt']));
 

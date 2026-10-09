@@ -1,5 +1,5 @@
 import {
-  db, collection, doc, addDoc, updateDoc, deleteDoc, getDocs,
+  db, collection, doc, addDoc, updateDoc, deleteDoc, setDoc, getDocs,
   query, where, orderBy, onSnapshot, serverTimestamp
 } from './firebase.js';
 import { CLOUD_URL, TIMEOUTS, LOCAL_APP } from './config.js';
@@ -554,10 +554,13 @@ export function subDisciplinaryActions(onUpdate) {
   );
 }
 
+// Idempotente: o id do documento vem do `clientId` do formulário (`disc_<clientId>`), o MESMO que o servidor local usa →
+// reenvio e sincronização local↔nuvem não duplicam o desconto. `origin` marca onde foi lançada (ver dedupeDisciplinaryActions).
 export async function createDisciplinaryAction(data, currentUser) {
-  await addDoc(collection(db, 'disciplinaryActions'), {
+  const clientId = data.clientId || (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `c${Date.now()}${Math.random().toString(36).slice(2, 10)}`);
+  await setDoc(doc(db, 'disciplinaryActions', `disc_${clientId}`), {
     targetType: data.targetType, targetId: data.targetId, targetName: data.targetName,
-    reason: data.reason, points: DISCIPLINE_POINTS,
+    reason: data.reason, points: DISCIPLINE_POINTS, origin: 'cloud', clientId,
     createdAt: serverTimestamp(), createdBy: currentUser?.username || 'admin', createdByName: currentUser?.name || 'Administrador'
   });
 }

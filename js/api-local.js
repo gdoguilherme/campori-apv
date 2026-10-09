@@ -309,6 +309,11 @@ export async function fetchPublicRanking() {
 }
 
 export async function createDisciplinaryAction(data, currentUser) {
-  await apiFetch('/discipline', { method: 'POST', body: { targetType: data.targetType, targetId: data.targetId, reason: data.reason } });
+  try {
+    await apiFetch('/discipline', { method: 'POST', body: { targetType: data.targetType, targetId: data.targetId, reason: data.reason, clientId: data.clientId || null, confirmDuplicate: !!data.confirmDuplicate } });
+  } catch (e) {
+    if (e instanceof HttpError && e.code === 'DUPLICATE_RECENT') { const err = new Error(e.message); err.code = 'DUPLICATE_RECENT'; throw err; }
+    throw e;
+  }
 }
 export const deleteDisciplinaryAction = id => apiFetch(`/discipline/${encodeURIComponent(id)}`, { method: 'DELETE' });

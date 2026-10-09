@@ -9,10 +9,11 @@ import {
   createParticipant, updateParticipant, deleteParticipant as apiDeleteParticipant, createParticipantsBulk,
   createUnit, updateUnit, deleteUnit as apiDeleteUnit, allocateParticipant,
   computeUnitScores, computeStars,
-  subDisciplinaryActions, createDisciplinaryAction, deleteDisciplinaryAction as apiDeleteDiscipline,
+  subDisciplinaryActions, createDisciplinaryAction, deleteDisciplinaryAction as apiDeleteDiscipline, refreshNow,
   CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS, AREAS_ATUACAO, FILLED_BY
 } from './api.js';
 import { loadIdentifiedRanking, rankingStampHtml } from './ranking.js';
+import { mountPortalBar } from './portalBar.js';
 import { UNIFORM_CATEGORIES, buildUniformCsv, computeUniformPoints } from '../shared/uniforme.js';
 import { dedupeDisciplinaryActions, findRecentSameInfraction, DISCIPLINE_DUP_WINDOW_MS } from '../shared/scoring.js';
 
@@ -56,6 +57,7 @@ export function init() {
 
   refreshUsers();
   render();
+  mountPortalBar({ getPending: async () => 0, syncNow: async () => { await refreshNow(); return { sent: 0 }; } });
   setInterval(() => { if (S.adminTab === 'ranking') refreshRanking(); }, 30_000);   // só enquanto a aba Ranking está aberta
 }
 

@@ -115,6 +115,9 @@ function listen(fetchDocs, project, onUpdate, label) {
   return () => { stopped = true; subs.delete(sub); stopTimerIfIdle(); };
 }
 
+// "Sincronizar agora" dos portais sem fila própria (admin/região): rebaixa tudo já, sem esperar o próximo ciclo
+export async function refreshNow() { await Promise.all([...subs].map(x => x.refresh())); }
+
 const listDocs = (col, filters) => async () => (await apiFetch(dataPath(col, filters))).docs;
 const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 const byOrder = (a, b) => (a.order ?? 1e9) - (b.order ?? 1e9);

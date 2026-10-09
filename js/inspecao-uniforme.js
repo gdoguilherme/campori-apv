@@ -3,7 +3,8 @@
 // Modo local: a inspeção entra na fila offline do Fiscal (IndexedDB, idempotente) e é enviada ao servidor local;
 // nuvem: grava direto (Firestore) como as demais avaliações. Em ambos fica PENDENTE para o admin aprovar.
 import { guardPage, portalUrlForUser, startExpiryWatcher } from './auth.js';
-import { subReqs, subSubs, subRegions, setRegionCache, subUnits, rname, fmtDate, toast, doUniformInspection } from './api.js';
+import { subReqs, subSubs, subRegions, setRegionCache, subUnits, rname, fmtDate, toast, doUniformInspection, refreshNow } from './api.js';
+import { mountPortalBar } from './portalBar.js';
 import { LOCAL_APP, TIMEOUTS } from './config.js';
 import { getServerState, onServerChange, resolveServer } from './net.js';
 import { requestPersistence } from './offlineDb.js';
@@ -56,6 +57,11 @@ export function init() {
     startFiscalAutoSync();
     refreshQueue();
   }
+  mountPortalBar({
+    offsetBottom: '8.5rem',
+    getPending: async () => (LOCAL_APP ? (await listFiscalQueue(S.user.id)).filter(q => q.status === FQ_STATUS.PENDENTE).length : 0),
+    syncNow: async () => (LOCAL_APP ? syncFiscalNow({ manual: true }) : (await refreshNow(), { sent: 0 }))
+  });
   render();
 }
 let _sig = '';

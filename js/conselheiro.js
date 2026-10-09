@@ -4,11 +4,12 @@ import {
   renderAnonRanking, setRegionCache
 } from './api.js';
 import { isDeadlinePassed, computeUnitBreakdown } from '../shared/scoring.js';
-import { evaluateOfflineScan } from '../shared/sync.js';
+import { evaluateOfflineScan, counselorPortalTotals } from '../shared/sync.js';
 import { getServerState, onServerChange, resolveServer, isCloudReachable, withTimeout } from './net.js';
 import { TIMEOUTS } from './config.js';
 import { isPersistent, requestPersistence } from './offlineDb.js';
 import { rankingStampHtml } from './ranking.js';
+import { mountPortalBar } from './portalBar.js';
 import {
   STATUS, listQueue, enqueueScan, syncNow, refreshSnapshot, loadSnapshot, clearSnapshot,
   startAutoSync, onQueueChange, onAutoSyncResult, getSyncState
@@ -62,6 +63,11 @@ export async function init() {
   onServerChange(() => reloadFromStore().then(softRender));
   onAutoSyncResult(sum => notifySync(sum, false));
   startAutoSync();
+  mountPortalBar({
+    offsetBottom: '4.5rem',
+    getPending: async () => pendingItems().length,
+    syncNow: async () => { const sum = await syncNow({ manual: true }); await refreshSnapshot(); return sum; }
+  });
   resolveServer().then(() => reloadFromStore()).then(softRender);
   refreshSnapshot();
 }
@@ -150,9 +156,7 @@ function vPortal() {
 
   // Requisitos do tipo Conselheiro — sem distinção de modalidade (unidades são mistas)
   const visibleReqs = S.requirements.filter(r => r.active !== false && reqFilledBy(r) === 'conselheiro');
-  const regionPossible = S.regionRequirements.reduce((a, r) => a + (r.points || 0), 0);
-  const inspectionPossible = S.inspectionRequirements.reduce((a, r) => a + (r.points || 0), 0);
-  const totalPossible = visibleReqs.reduce((a, r) => a + (r.points || 0), 0) + inspectionPossible + regionPossible;   // da unidade + os que valem da região
+  // (os totais — possíveis e confirmados — vêm de counselorPortalTotals, calculados mais abaixo)
 
   // Submission que representa o requisito no card: aprovada > pendente > mais recente.
   // Registros "substituídos" (scan de QR que perdeu para um mais antigo de outro aparelho)
@@ -172,9 +176,12 @@ function vPortal() {
     .filter(q => q.status === STATUS.SINCRONIZADO && q.submissionId && !knownIds.has(q.submissionId))
     .map(q => ({ id: q.submissionId, unitId: q.unitId, regionId: unit?.regionId, requirementId: q.requisitoId, status: 'approved',
       requirementPoints: q.pontos, submittedAt: { seconds: Math.floor(q.scanTimestamp / 1000), nanoseconds: 0 } }));
-  const bd = unit
-    ? computeUnitBreakdown({ unit, unitSubmissions: [...S.submissions, ...acceptedNotInSnapshot], regionSubmissions: S.regionSubmissions, disciplinaryActions: S.disciplinary })
-    : { own: 0, region: 0, discipline: 0, total: 0, floored: false };
+  const totals = counselorPortalTotals(
+    { unit, requirements: S.requirements, inspectionRequirements: S.inspectionRequirements, regionRequirements: S.regionRequirements,
+      submissions: S.submissions, regionSubmissions: S.regionSubmissions, disciplinaryActions: S.disciplinary },
+    { extraUnitSubmissions: acceptedNotInSnapshot });
+  const bd = totals.breakdown;
+  const { possible: totalPossible, regionPossible } = totals;
   const approvedPts = bd.total;
   const queuedPts = pendingItems().reduce((a, q) => a + (q.pontos || 0), 0); // 🕓 só no aparelho — ainda NÃO contam
   const pendingPts = S.submissions                                  // ⏳ comprovações aguardando aprovação do admin

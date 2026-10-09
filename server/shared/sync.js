@@ -5,7 +5,7 @@
 // `node scripts/sync-shared.mjs` (o Docker do Fly.io só enxerga a pasta server/).
 
 import { isUniformReq } from './uniforme.js';
-import { reqFilledBy, evaluateQrScan, findQrDuplicate, computeUnitScores, tsSeconds, dedupeDisciplinaryActions } from './scoring.js';
+import { reqFilledBy, evaluateQrScan, findQrDuplicate, computeUnitScores, computeUnitBreakdown, tsSeconds, dedupeDisciplinaryActions } from './scoring.js';
 
 export const SCAN_BATCH_MAX = 100;
 const CLOCK_SKEW_MS = 5 * 60_000;      // scanTimestamp "do futuro" além disso é limitado ao agora
@@ -180,4 +180,17 @@ export function buildCounselorBootstrap({ user, unit, region, regions, participa
       ? computeUnitScores(allSubmissions, allUnits, disciplinaryActions || []).filter(s => s.total > 0).map(s => ({ total: s.total }))
       : null,
   };
+}
+
+// Números do portal do Conselheiro (pontos confirmados × possíveis) a partir do snapshot — a MESMA conta do ranking
+// (computeUnitBreakdown) + "possíveis" = requisitos da unidade + inspeção de uniforme + requisitos da região.
+// js/conselheiro.js usa esta função; o teste de regressão confere que ela acompanha cada sincronização.
+export function counselorPortalTotals(data, { extraUnitSubmissions = [] } = {}) {
+  const unitPossible = (data.requirements || []).filter(r => r.active !== false && reqFilledBy(r) === 'conselheiro').reduce((a, r) => a + (r.points || 0), 0);
+  const inspectionPossible = (data.inspectionRequirements || []).reduce((a, r) => a + (r.points || 0), 0);
+  const regionPossible = (data.regionRequirements || []).reduce((a, r) => a + (r.points || 0), 0);
+  const breakdown = data.unit
+    ? computeUnitBreakdown({ unit: data.unit, unitSubmissions: [...(data.submissions || []), ...extraUnitSubmissions], regionSubmissions: data.regionSubmissions || [], disciplinaryActions: data.disciplinaryActions || [] })
+    : { own: 0, region: 0, discipline: 0, total: 0, floored: false };
+  return { confirmed: breakdown.total, possible: unitPossible + inspectionPossible + regionPossible, unitPossible, inspectionPossible, regionPossible, breakdown };
 }

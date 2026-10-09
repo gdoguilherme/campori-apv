@@ -127,6 +127,9 @@ export function proofBlock(rawUrl, context = 'queue') {
   </div>`;
 }
 
+// Paridade com a versão do modo local: na nuvem o Firestore já atualiza em tempo real
+export async function refreshNow() {}
+
 // ── SUBSCRIPTIONS ─────────────────────────────────────────────
 
 export function subRegions(onUpdate) {

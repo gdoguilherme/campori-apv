@@ -1,9 +1,13 @@
-import { guardPage, logout as authLogout, saveSession, startExpiryWatcher } from './auth.js';
+import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatcher } from './auth.js';
 import {
-  subReqs, subSubs, rname, fmtDate, toast, showBanner,
-  addSubmission, uploadFile, updateSubmissionProof, updatePassword,
+  subReqs, subSubs, subRegions, setRegionCache, rname, fmtDate, toast, showBanner,
+  addSubmission, uploadFile, updateSubmissionProof, updatePassword, reqFilledBy,
+  subUnits, computeUnitScores, renderAnonRanking, subParticipants, updateRegionProfile,
+  subDisciplinaryActions, refreshNow,
   CATEGORIES
 } from './api.js';
+import { mountPortalBar } from './portalBar.js';
+import { loadAnonRanking, rankingStampHtml } from './ranking.js';
 
 // ── CONFIGURAÇÃO POR TEMA ──────────────────────────────────────
 const THEMES = {
@@ -31,15 +35,23 @@ const S = {
   theme: 'dbv',
   requirements: [],
   submissions: [],
+  allSubmissions: [], // todas as submissions do sistema — só pro ranking geral anônimo
+  units: [],
+  regions: [],
+  allParticipants: [],
+  disciplinaryActions: [],
   filterCat: 'Todos',
   selectedReq: null,
   photoFile: null,
   photoUrl: null,
-  modal: null,   // 'submit' | 'photo' | 'change-password'
+  profileLogoFile: null,
+  modal: null,   // 'submit' | 'photo' | 'change-password' | 'edit-profile'
   loading: false,
+  rankInfo: null,
 };
 
-let _unsubReqs = null, _unsubSubs = null;
+let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null, _unsubAllSubs = null,
+    _unsubUnits = null, _unsubParticipants = null, _unsubDiscipline = null;
 
 // ── INIT ──────────────────────────────────────────────────────
 export function init(theme) {
@@ -57,11 +69,25 @@ export function init(theme) {
 
   S.user = user;
   startExpiryWatcher();
+  mountPortalBar({ getPending: async () => 0, syncNow: async () => { await refreshNow(); return { sent: 0 }; } });
 
-  _unsubReqs = subReqs(reqs => { S.requirements = reqs; render(); });
-  _unsubSubs = subSubs(user.regionId, subs => { S.submissions = subs; render(); });
+  _unsubReqs        = subReqs(reqs => { S.requirements = reqs; render(); });
+  _unsubSubs        = subSubs(user.regionId, subs => { S.submissions = subs; render(); });
+  _unsubRegions     = subRegions(regs => { S.regions = regs; setRegionCache(regs); render(); });
+  _unsubAllSubs     = subSubs(null, subs => { S.allSubmissions = subs; render(); });
+  _unsubUnits       = subUnits(units => { S.units = units; render(); });
+  _unsubParticipants = subParticipants(ps => { S.allParticipants = ps; render(); });
+  _unsubDiscipline   = subDisciplinaryActions(actions => { S.disciplinaryActions = actions; render(); });
 
   render();
+  refreshRanking(); setInterval(refreshRanking, 45_000);   // ranking do servidor local (se o aparelho estiver nele) ou da nuvem
+}
+
+// Ranking anônimo: servidor local quando o aparelho está na rede do evento; senão o cálculo ao vivo da nuvem
+function refreshRanking() {
+  loadAnonRanking({ fallback: async () => computeUnitScores(S.allSubmissions, S.units, S.disciplinaryActions) })
+    .then(info => { S.rankInfo = info; if (!S.modal) render(); })
+    .catch(() => {});
 }
 
 // ── HELPERS ───────────────────────────────────────────────────
@@ -78,8 +104,7 @@ function fmtDeadline(ts) {
 }
 
 function canRegionSubmit(req) {
-  const ev = req.evaluatedBy || 'both';
-  return ev === 'region' || ev === 'both';
+  return reqFilledBy(req) === 'regional';
 }
 
 // ── RENDER ────────────────────────────────────────────────────
@@ -90,6 +115,7 @@ function render() {
   if (S.modal === 'submit')          html += mSubmit();
   else if (S.modal === 'photo')      html += mPhoto();
   else if (S.modal === 'change-password') html += mChangePassword();
+  else if (S.modal === 'edit-profile')    html += mEditProfile();
   el.innerHTML = html;
 }
 
@@ -98,25 +124,34 @@ function vPortal() {
   const { user, theme } = S;
   const tc = THEMES[theme];
   const rid = user.regionId;
+  const region = S.regions.find(r => r.id === rid) || {};
+
+  const myUnits = S.units.filter(u => u.regionId === rid);
+  const myUnitIds = myUnits.map(u => u.id);
+  const myParticipants = S.allParticipants.filter(p => p.regionId === rid || myUnitIds.includes(p.unitId));
+
+  // Submissions da própria região (exclui as de Conselheiro, que têm unitId e pontuam pra unidade, não pra região)
+  const regionSubmissions = S.submissions.filter(s => !s.unitId);
 
   // Última submission por requisito (qualquer source)
   const subByReq = {};
-  S.submissions.forEach(s => {
+  regionSubmissions.forEach(s => {
     const cur = subByReq[s.requirementId];
     if (!cur || (s.submittedAt?.seconds || 0) > (cur.submittedAt?.seconds || 0))
       subByReq[s.requirementId] = s;
   });
 
-  const approvedPts = S.submissions
+  const approvedPts = regionSubmissions
     .filter(s => s.status === 'approved')
     .reduce((a, s) => a + (s.requirementPoints || 0), 0);
-  const pendingPts = S.submissions
+  const pendingPts = regionSubmissions
     .filter(s => s.status === 'pending')
     .reduce((a, s) => a + (s.requirementPoints || 0), 0);
 
   const userCompCat = user.competitionCategory || null;
   const visibleReqs = S.requirements.filter(r =>
     r.active !== false &&
+    reqFilledBy(r) !== 'conselheiro' && r.inspection !== 'uniforme' &&
     (!userCompCat || !r.competitionCategory || r.competitionCategory === 'Ambos' || r.competitionCategory === userCompCat)
   );
   const totalPossible = visibleReqs.reduce((a, r) => a + r.points, 0);
@@ -130,11 +165,16 @@ function vPortal() {
     <!-- CABEÇALHO -->
     <div style="background:linear-gradient(135deg,${tc.primary},${tc.primary2});color:#fff;padding:1rem 1rem 1.5rem;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
-        <div style="display:flex;align-items:center;gap:.625rem;">
-          <img src="${tc.logo}" style="height:2.25rem;width:auto;object-fit:contain;" alt="${tc.label}">
+        <div style="display:flex;align-items:center;gap:.5rem;">
+          <div style="border-radius:.4rem;overflow:hidden;line-height:0;">
+            <img src="/assets/logo-integros-selo.png" alt="ÍNTEGROS" style="height:1.6rem;width:auto;object-fit:contain;display:block;">
+          </div>
+          <div style="width:1px;height:1.5rem;background:rgba(255,255,255,.25);"></div>
+          <img src="${tc.logo}" style="height:1.9rem;width:auto;object-fit:contain;" alt="${tc.label}">
           <span style="font-size:.8rem;color:${tc.muted};">👤 ${user.name}</span>
         </div>
         <div style="display:flex;gap:.5rem;align-items:center;">
+          <img src="/assets/logo-apv.png" alt="APV" style="height:1.3rem;width:auto;object-fit:contain;opacity:.85;">
           <button onclick="W.openChangePwd()"
             style="background:rgba(0,0,0,.2);border:none;color:rgba(255,255,255,.8);
             padding:.375rem .7rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔑</button>
@@ -166,8 +206,61 @@ function vPortal() {
       </div>
     </div>
 
+    <!-- PERFIL DA REGIÃO -->
+    <div style="padding:1rem 1rem 0;">
+      <div class="card" style="padding:1rem;">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem;">
+          <div style="display:flex;gap:.75rem;align-items:center;flex:1;min-width:0;">
+            ${region.logoUrl
+              ? `<img src="${region.logoUrl}" style="width:3rem;height:3rem;border-radius:.75rem;object-fit:cover;flex-shrink:0;">`
+              : `<div style="width:3rem;height:3rem;border-radius:.75rem;background:#f1f5f9;display:flex;align-items:center;justify-content:center;font-size:1.5rem;flex-shrink:0;">🛡️</div>`}
+            <div style="min-width:0;">
+              <div style="font-weight:800;color:#1e293b;font-size:.9rem;">${region.warCry ? `"${region.warCry}"` : 'Sem nome de guerra definido'}</div>
+              ${region.extraInfo ? `<div style="font-size:.78rem;color:#64748b;margin-top:.15rem;">${region.extraInfo}</div>` : ''}
+            </div>
+          </div>
+          <button onclick="W.openEditProfile()"
+            style="background:#eff6ff;color:#1d4ed8;border:none;padding:.5rem;border-radius:.625rem;cursor:pointer;flex-shrink:0;">✏️</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- UNIDADES DA REGIÃO -->
+    ${myUnits.length > 0 ? `
+    <div style="padding:1rem 1rem 0;">
+      <div style="font-weight:800;color:#1e293b;font-size:.9rem;margin-bottom:.625rem;">🏕️ Unidades da Região</div>
+      <div style="display:flex;flex-direction:column;gap:.5rem;">
+        ${myUnits.map(u => {
+          const count = S.allParticipants.filter(p => p.unitId === u.id).length;
+          return `
+          <div class="card" style="padding:.875rem 1rem;display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div style="font-weight:700;color:#1e293b;font-size:.88rem;">${u.name}</div>
+              ${u.warCry ? `<div style="font-size:.75rem;color:#64748b;font-style:italic;">"${u.warCry}"</div>` : ''}
+            </div>
+            <span style="background:#dbeafe;color:#1d4ed8;font-size:.75rem;font-weight:700;padding:.25rem .625rem;border-radius:999px;">👥 ${count}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+
+    <!-- PARTICIPANTES DA REGIÃO -->
+    <div style="padding:1rem 1rem 0;">
+      <div style="font-weight:800;color:#1e293b;font-size:.9rem;margin-bottom:.625rem;">👥 Participantes (${myParticipants.length})</div>
+      ${myParticipants.length === 0
+        ? `<p style="text-align:center;color:#94a3b8;font-size:.85rem;padding:1rem 0;">Nenhum participante cadastrado ainda</p>`
+        : `<div class="card" style="padding:.5rem;">
+          ${myParticipants.map(p => `
+          <div style="padding:.5rem .625rem;border-bottom:1px solid #f8fafc;">
+            <span style="font-weight:600;color:#1e293b;font-size:.85rem;">${p.name}</span>
+            <span style="color:#94a3b8;font-size:.75rem;"> ${p.club ? `· ${p.club}` : ''}</span>
+            ${p.regionId !== rid ? `<span style="color:#92400e;font-size:.72rem;font-weight:700;"> · clube amigo</span>` : ''}
+          </div>`).join('')}
+        </div>`}
+    </div>
+
     <!-- FILTRO CATEGORIA -->
-    <div style="background:#fff;border-bottom:1px solid #f1f5f9;padding:.625rem 1rem;display:flex;gap:.5rem;overflow-x:auto;scrollbar-width:none;">
+    <div style="background:#fff;border-bottom:1px solid #f1f5f9;padding:.625rem 1rem;display:flex;gap:.5rem;overflow-x:auto;scrollbar-width:none;margin-top:1rem;">
       ${cats.map(c => `
       <button onclick="W.filterCat('${c}')"
         style="white-space:nowrap;padding:.375rem .875rem;border-radius:999px;border:none;
@@ -179,13 +272,26 @@ function vPortal() {
     </div>
 
     <!-- LISTA DE REQUISITOS -->
-    <div style="padding:1rem;display:flex;flex-direction:column;gap:.75rem;padding-bottom:5rem;">
+    <div style="padding:1rem;display:flex;flex-direction:column;gap:.75rem;">
       ${list.length === 0
         ? `<div style="text-align:center;padding:4rem 1rem;color:#94a3b8;">
             <div style="font-size:3rem;">📋</div>
             <p style="font-weight:600;margin:.5rem 0 0;">Nenhum requisito</p>
            </div>`
         : list.map(req => reqCard(req, subByReq[req.id], tc)).join('')}
+    </div>
+
+    <!-- RANKING GERAL (anônimo, por unidade) -->
+    <div style="padding:0 1rem 5rem;">
+      <div class="card" style="padding:1rem;">
+        <div style="font-weight:800;color:#1e293b;font-size:.9rem;margin-bottom:.75rem;">🏆 Ranking Geral das Unidades</div>
+        ${(() => {
+          // fonte nuvem = cálculo ao vivo (listeners do Firestore); fonte local/cópia guardada = o que o servidor devolveu
+          const live = !S.rankInfo || S.rankInfo.source === 'cloud';
+          const rows = live ? computeUnitScores(S.allSubmissions, S.units, S.disciplinaryActions) : S.rankInfo.rows;
+          return renderAnonRanking(rows) + rankingStampHtml(live ? { updatedAt: Date.now(), source: 'cloud' } : S.rankInfo);
+        })()}
+      </div>
     </div>
   </div>`;
 }
@@ -195,7 +301,7 @@ function reqCard(req, sub, tc) {
   const isPending  = sub?.status === 'pending';
   const isRejected = sub?.status === 'rejected';
   const isFiscalSuggestion = sub?.fiscalSuggestion === true;
-  const fiscalOnly = (req.evaluatedBy || 'both') === 'fiscal';
+  const fiscalOnly = reqFilledBy(req) === 'fiscal';
   const canSend    = canRegionSubmit(req);
   const deadlinePassed = isDeadlinePassed(req);
   const deadlineFmt    = fmtDeadline(req.deadline);
@@ -214,6 +320,7 @@ function reqCard(req, sub, tc) {
         <!-- Badges -->
         <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem;">
           <span style="background:#f1f5f9;color:#475569;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.category}</span>
+          ${req.areaAtuacao ? `<span style="background:#eef2ff;color:#4338ca;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">📌 ${req.areaAtuacao}</span>` : ''}
           <span style="background:#dbeafe;color:#1d4ed8;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts</span>
           ${req.phase ? `<span style="background:#f0fdf4;color:#166534;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.phase}</span>` : ''}
           ${req.competitionCategory && req.competitionCategory !== 'Ambos'
@@ -353,6 +460,52 @@ function mPhoto() {
   </div>`;
 }
 
+// ── MODAL: EDITAR PERFIL DA REGIÃO ─────────────────────────────
+function mEditProfile() {
+  const tc = THEMES[S.theme];
+  const region = S.regions.find(r => r.id === S.user.regionId) || {};
+
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:420px;">
+      <h2 style="font-size:1.1rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">✏️ Perfil da Região</h2>
+      <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>
+          <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">Nome de Guerra</label>
+          <input type="text" id="pf-warcry" value="${region.warCry || ''}" placeholder="Ex: Guerreiros da Fé"
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;">
+        </div>
+        <div>
+          <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">Logo da Região</label>
+          <div class="upload-area ${S.profileLogoFile ? 'filled' : ''}" onclick="document.getElementById('pf-logo-inp').click()">
+            ${S.profileLogoFile
+              ? `<div style="color:#16a34a;font-weight:700;font-size:.9rem;">✅ ${S.profileLogoFile.name}</div>`
+              : region.logoUrl
+                ? `<img src="${region.logoUrl}" style="width:3rem;height:3rem;border-radius:.75rem;object-fit:cover;margin:0 auto .375rem;">
+                   <div style="font-size:.78rem;color:#374151;">Toque para trocar</div>`
+                : `<div style="font-size:1.75rem;">🖼️</div><div style="font-size:.82rem;color:#374151;">Toque para enviar logo</div>`}
+          </div>
+          <input type="file" id="pf-logo-inp" accept="image/*" onchange="W.handleProfileLogoFile(event)">
+        </div>
+        <div>
+          <label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">Informações Extras</label>
+          <textarea id="pf-extrainfo" rows="3" placeholder="Sobre a região, contato, observações..."
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;resize:none;outline:none;font-family:inherit;">${region.extraInfo || ''}</textarea>
+        </div>
+        <button onclick="W.saveProfile()" ${S.loading ? 'disabled' : ''}
+          style="width:100%;background:${tc.primary};color:#fff;border:none;padding:1.1rem;
+          border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          ${S.loading ? '⏳ Salvando...' : '💾 Salvar Perfil'}
+        </button>
+      </div>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">
+        Cancelar
+      </button>
+    </div>
+  </div>`;
+}
+
 // ── MODAL: TROCAR SENHA ───────────────────────────────────────
 function mChangePassword() {
   const tc = THEMES[S.theme];
@@ -396,13 +549,49 @@ window.W = {
   logout() {
     if (_unsubReqs) _unsubReqs();
     if (_unsubSubs) _unsubSubs();
+    if (_unsubRegions) _unsubRegions();
+    if (_unsubAllSubs) _unsubAllSubs();
+    if (_unsubUnits) _unsubUnits();
+    if (_unsubParticipants) _unsubParticipants();
+    if (_unsubDiscipline) _unsubDiscipline();
     authLogout();
   },
 
   filterCat(cat) { S.filterCat = cat; render(); },
-  closeModal()   { S.modal = null; render(); },
+  closeModal()   { S.modal = null; S.profileLogoFile = null; render(); },
   openPhoto(url) { S.photoUrl = url; S.modal = 'photo'; render(); },
   openChangePwd(){ S.modal = 'change-password'; render(); },
+  openEditProfile() { S.profileLogoFile = null; S.modal = 'edit-profile'; render(); },
+
+  handleProfileLogoFile(evt) {
+    const f = evt.target.files[0] || null;
+    if (f && f.size > 10_485_760) {
+      toast('⚠️ Arquivo muito grande! Máximo 10 MB.', 'error');
+      evt.target.value = '';
+      S.profileLogoFile = null;
+    } else {
+      S.profileLogoFile = f;
+    }
+    render();
+  },
+
+  async saveProfile() {
+    const warCry    = document.getElementById('pf-warcry')?.value?.trim() || '';
+    const extraInfo = document.getElementById('pf-extrainfo')?.value?.trim() || '';
+    S.loading = true; render();
+    try {
+      let logoUrl;
+      if (S.profileLogoFile) {
+        logoUrl = await uploadFile(S.profileLogoFile, S.user.regionId, 'perfil-logo');
+      }
+      await updateRegionProfile(S.user.regionId, { warCry, extraInfo, ...(logoUrl ? { logoUrl } : {}) });
+      toast('✅ Perfil atualizado!');
+      S.modal = null; S.profileLogoFile = null;
+    } catch (e) {
+      toast(e.message || 'Erro ao salvar perfil.', 'error');
+    }
+    S.loading = false; render();
+  },
 
   openSubmit(reqId) {
     S.selectedReq = reqId;
@@ -464,19 +653,17 @@ window.W = {
     const confirm = document.getElementById('pwd-confirm')?.value;
 
     if (!current || !newPwd || !confirm) { toast('Preencha todos os campos', 'error'); return; }
-    if (S.user.password !== current)     { toast('Senha atual incorreta', 'error');   return; }
     if (newPwd.length < 4)               { toast('Mínimo 4 caracteres', 'error');     return; }
     if (newPwd !== confirm)              { toast('As senhas não coincidem', 'error'); return; }
 
     S.loading = true; render();
     try {
-      await updatePassword(S.user.id, newPwd);
-      S.user = { ...S.user, password: newPwd };
+      await updatePassword(S.user.id, newPwd, getToken(), current);
       saveSession(S.user);
       toast('✅ Senha alterada com sucesso!');
       S.modal = null;
     } catch (e) {
-      toast('Erro ao alterar senha', 'error');
+      toast(e.message || 'Erro ao alterar senha', 'error');
     }
     S.loading = false; render();
   },

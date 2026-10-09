@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Painel do servidor — Campori ÍNTEGROS</title>
+<style>
+  :root { --green:#16a34a; --yellow:#f59e0b; --red:#dc2626; --gray:#94a3b8; --ink:#0f172a; --muted:#475569; --card:#fff; --bg:#eef2f7; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:18px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  header { background:#0D2B6E; color:#fff; padding:14px 20px; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+  header h1 { font-size:1.15rem; margin:0; font-weight:800; }
+  header small { opacity:.85; font-size:.85rem; }
+  main { max-width:980px; margin:0 auto; padding:16px; display:grid; gap:16px; }
+  .card { background:var(--card); border-radius:18px; padding:18px 20px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  .hero { display:flex; gap:22px; align-items:center; border:4px solid var(--gray); }
+  .hero .dot { flex:none; width:96px; height:96px; border-radius:50%; background:var(--gray); display:flex; align-items:center; justify-content:center; font-size:3rem; color:#fff; box-shadow:inset 0 -6px 0 rgba(0,0,0,.15); }
+  .hero h2 { margin:0 0 4px; font-size:1.6rem; line-height:1.2; }
+  .hero p { margin:0; color:var(--muted); }
+  .hero.green { border-color:var(--green); } .hero.green .dot { background:var(--green); }
+  .hero.yellow { border-color:var(--yellow); } .hero.yellow .dot { background:var(--yellow); }
+  .hero.red { border-color:var(--red); } .hero.red .dot { background:var(--red); }
+  .lights { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; }
+  .light { display:flex; align-items:center; gap:12px; padding:14px 16px; }
+  .light i { width:28px; height:28px; border-radius:50%; background:var(--gray); flex:none; }
+  .light.green i { background:var(--green); } .light.yellow i { background:var(--yellow); } .light.red i { background:var(--red); }
+  .light b { display:block; font-size:.78rem; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  .nums { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; }
+  .num b { display:block; font-size:2rem; line-height:1.1; } .num span { color:var(--muted); font-size:.9rem; }
+  button { font:inherit; font-weight:800; border:0; border-radius:14px; padding:16px 22px; cursor:pointer; background:#0D2B6E; color:#fff; font-size:1.1rem; }
+  button:disabled { opacity:.6; cursor:wait; } button.alt { background:#e2e8f0; color:var(--ink); font-size:.95rem; padding:10px 16px; }
+  .toolbar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .msg { border-radius:14px; padding:14px 16px; font-weight:600; display:none; }
+  .msg.ok { display:block; background:#dcfce7; color:#14532d; } .msg.warn { display:block; background:#fef3c7; color:#78350f; } .msg.err { display:block; background:#fee2e2; color:#7f1d1d; }
+  .alert { background:#fff7ed; border:2px solid var(--yellow); }
+  .alert h3 { margin:0 0 8px; } .alert li { margin:6px 0; }
+  h3 { margin:0 0 10px; font-size:1.1rem; }
+  table { width:100%; border-collapse:collapse; font-size:.95rem; } th { text-align:left; color:var(--muted); font-size:.8rem; text-transform:uppercase; padding:6px 8px; border-bottom:2px solid #e2e8f0; }
+  td { padding:9px 8px; border-bottom:1px solid #eef2f7; } td.r { text-align:right; white-space:nowrap; }
+  .tag { display:inline-block; border-radius:999px; padding:3px 12px; font-weight:700; font-size:.85rem; }
+  .tag.sincronizado { background:#dcfce7; color:#166534; } .tag.pendente { background:#fef3c7; color:#92400e; } .tag.erro { background:#fee2e2; color:#991b1b; }
+  .scroll { max-height:340px; overflow:auto; }
+  .banner-down { display:none; background:var(--red); color:#fff; padding:16px 20px; font-weight:800; text-align:center; font-size:1.2rem; }
+  .small { font-size:.85rem; color:var(--muted); }
+  #pin { position:fixed; inset:0; background:rgba(15,23,42,.8); display:none; align-items:center; justify-content:center; padding:20px; z-index:9; }
+  #pin .card { max-width:340px; width:100%; text-align:center; } #pin input { font:inherit; font-size:1.6rem; text-align:center; width:100%; padding:12px; border:2px solid #cbd5e1; border-radius:12px; letter-spacing:.3em; margin:12px 0; }
+  @media (max-width:560px) { .hero { flex-direction:column; text-align:center; } .hero h2 { font-size:1.35rem; } }
+</style>
+</head>
+<body>
+<div class="banner-down" id="down">⚠️ Não consigo falar com o servidor. Verifique se a janela preta do servidor está aberta (INICIAR.bat).</div>
+<header>
+  <h1>🖥️ Painel do servidor — Campori ÍNTEGROS</h1>
+  <small id="updated">Carregando…</small>
+</header>
+<main>
+  <section class="card hero" id="hero"><div class="dot" id="heroDot">…</div><div><h2 id="heroTitle">Carregando…</h2><p id="heroDetail"></p></div></section>
+
+  <section class="lights">
+    <div class="card light" id="lightServer"><i></i><div><b>Servidor</b><span id="lightServerText">…</span></div></div>
+    <div class="card light" id="lightCloud"><i></i><div><b>Nuvem</b><span id="lightCloudText">…</span></div></div>
+    <div class="card light" id="lightData"><i></i><div><b>Dados</b><span id="lightDataText">…</span></div></div>
+  </section>
+
+  <section class="nums">
+    <div class="card num"><b id="nLast">—</b><span id="nLastSub">Última sincronização com sucesso</span></div>
+    <div class="card num"><b id="nPull">—</b><span id="nPullSub">Última atualização vinda da nuvem</span></div>
+    <div class="card num"><b id="nPending">0</b><span>Itens aguardando envio</span></div>
+    <div class="card num"><b id="nErrors">0</b><span>Itens com erro</span></div>
+  </section>
+
+  <section class="card">
+    <div class="toolbar">
+      <button id="btnSync">🔄 Sincronizar agora</button>
+      <button id="btnPull" class="alt">⬇️ Atualizar dados da nuvem</button>
+      <span class="small" id="syncHint">Envia o que está pendente e traz as novidades da nuvem.</span>
+    </div>
+    <div class="msg" id="syncMsg" style="margin-top:14px"></div>
+  </section>
+
+  <section class="card" id="opsCard">
+    <h3>🖥️ Operação do PC</h3>
+    <div class="nums" id="opsNums"></div>
+    <div class="toolbar" style="margin-top:14px">
+      <button id="btnBackup" class="alt">💾 Baixar backup agora</button>
+      <span class="small" id="backupInfo"></span>
+    </div>
+    <div class="msg" id="backupMsg" style="margin-top:12px"></div>
+  </section>
+
+  <section class="card" id="uploadsCard">
+    <h3>📷 Fotos / comprovações</h3>
+    <div><b id="upCount">0</b> arquivo(s) · <b id="upSize">0 B</b> em <span class="small" id="upDir"></span></div>
+    <div class="msg warn" id="upWarn" style="margin-top:10px"></div>
+  </section>
+
+  <section class="card alert" id="alertsCard" style="display:none">
+    <h3>⚠️ Pontos que já estavam cadastrados</h3>
+    <ul id="alertsList"></ul>
+    <button class="alt" id="btnAck">Entendi — limpar avisos</button>
+  </section>
+
+  <section class="card" id="errorsCard" style="display:none">
+    <h3>❌ Erros recentes</h3><ul id="errorsList" class="small" style="padding-left:20px;margin:0"></ul>
+  </section>
+
+  <section class="card"><h3>Unidades</h3><div class="scroll"><table><thead><tr><th>Unidade</th><th>Região</th><th class="r">Situação</th></tr></thead><tbody id="unitsBody"></tbody></table></div></section>
+  <section class="card"><h3>Requisitos</h3><div class="scroll"><table><thead><tr><th>Requisito</th><th class="r">Situação</th></tr></thead><tbody id="reqBody"></tbody></table></div></section>
+  <p class="small" id="foot"></p>
+</main>
+
+<div id="pin"><div class="card"><h3>🔒 Digite o PIN</h3><p class="small">Este painel só abre em outro aparelho com o PIN do servidor.</p>
+  <input id="pinInput" type="password" inputmode="numeric" autocomplete="off" maxlength="12"><div class="msg err" id="pinErr"></div><button id="pinOk" style="width:100%">Entrar</button></div></div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var pin = ''; try { pin = sessionStorage.getItem('statusPin') || ''; } catch (e) {}
+  var failures = 0, lastOk = 0, skew = 0;   // skew: diferença entre o relógio do servidor e o deste aparelho (os tempos mostrados usam a hora DO SERVIDOR)
+  function nowS() { return Date.now() + skew; }
+
+  function fmt(ts) { return new Date(ts).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+  function ago(ts) { var s = Math.max(0, Math.round((nowS() - ts) / 1000)); if (s < 60) return 'há ' + s + ' s'; var m = Math.floor(s / 60); if (m < 60) return 'há ' + m + ' min'; var h = Math.floor(m / 60); return h < 24 ? 'há ' + h + ' h' : 'há ' + Math.floor(h / 24) + ' d'; }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function api(path, opts) {
+    opts = opts || {}; opts.headers = Object.assign({ 'X-Status-Pin': pin, 'Content-Type': 'application/json' }, opts.headers || {});
+    return fetch('/status/api/' + path, opts).then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { status: r.status, body: j }; }); });
+  }
+  function needPin(msg) { $('pin').style.display = 'flex'; $('pinErr').style.display = msg ? 'block' : 'none'; $('pinErr').textContent = msg || ''; $('pinInput').focus(); }
+
+  var ICON = { green: '✓', yellow: '⏳', red: '!', gray: '?' };
+  function tag(o) { return o.state === 'sincronizado' ? '<span class="tag sincronizado">✅ Sincronizado</span>' : o.state === 'erro' ? '<span class="tag erro">❌ Erro</span>' : '<span class="tag pendente">🕓 Pendente (' + o.pending + ')</span>'; }
+
+  function render(d) {
+    $('hero').className = 'card hero ' + d.overall.color; $('heroDot').textContent = ICON[d.overall.color] || '?';
+    $('heroTitle').textContent = d.overall.title; $('heroDetail').textContent = d.overall.detail;
+    [['Server', d.lights.server], ['Cloud', d.lights.cloud], ['Data', d.lights.data]].forEach(function (p) { $('light' + p[0]).className = 'card light ' + p[1].color; $('light' + p[0] + 'Text').textContent = p[1].text; });
+    var s = d.sync;
+    $('nLast').textContent = s.lastSuccessAt ? new Date(s.lastSuccessAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : 'ainda não';
+    $('nLastSub').textContent = s.lastSuccessAt ? 'Última sincronização com sucesso (' + ago(s.lastSuccessAt) + ')' : 'Nenhuma sincronização concluída ainda';
+    var pl = d.pull;
+    $('nPull').textContent = pl && pl.lastPullAt ? new Date(pl.lastPullAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : 'ainda não';
+    $('nPullSub').textContent = pl && pl.error ? 'Atualização automática interrompida: ' + pl.error : pl && pl.lastPullAt ? 'Última atualização vinda da nuvem (' + ago(pl.lastPullAt) + ')' + (pl.listening ? ' · acompanhando em tempo real' : '') : 'Nenhuma atualização vinda da nuvem ainda';
+    $('nPending').textContent = s.pending; $('nErrors').textContent = d.errors.failing.length;
+    $('nErrors').style.color = d.errors.failing.length ? 'var(--red)' : ''; $('nPending').style.color = s.pending ? '#b45309' : '';
+    $('btnSync').disabled = !!s.running; $('btnPull').disabled = !!s.running; $('btnSync').textContent = s.running ? '⏳ Sincronizando…' : '🔄 Sincronizar agora';
+    $('syncHint').textContent = s.enabled ? (s.nextAttemptAt && s.nextAttemptAt > nowS() ? 'Nova tentativa automática em ' + Math.max(1, Math.round((s.nextAttemptAt - nowS()) / 1000)) + ' s.' : 'Envia o que está pendente e traz as novidades da nuvem.') : 'A sincronização está desligada neste servidor.';
+
+    if (d.ops) {
+      var o = d.ops, c = o.counts, nums = [
+        ['Regiões', c.regions], ['Unidades', c.units], ['Participantes', c.participants], ['Requisitos', c.requirements], ['Usuários', c.users],
+        ['Submissões', c.submissions.total + ' (' + c.submissions.pending + ' pend. · ' + c.submissions.approved + ' aprov.)'],
+        ['Espaço livre no disco', o.disk ? o.disk.free + (o.disk.low ? ' ⚠️ pouco!' : '') : '—'],
+        ['Certificado HTTPS', o.cert ? (o.cert.enabled ? (o.cert.daysLeft + ' dia(s)' + (o.cert.daysLeft < 15 ? ' ⚠️' : '')) : 'desligado') : '—']
+      ];
+      $('opsNums').innerHTML = nums.map(function (n) { return '<div class="num"><b style="font-size:1.35rem">' + esc(n[1]) + '</b><span>' + esc(n[0]) + '</span></div>'; }).join('');
+      $('backupInfo').textContent = o.backup ? 'Último backup automático: ' + ago(o.backup.lastAt) + ' (' + o.backup.count + ' guardados em backups/)' : 'Ainda não há backup em backups/';
+    }
+    if (d.uploads) { $('upCount').textContent = d.uploads.count; $('upSize').textContent = d.uploads.size; $('upDir').textContent = d.uploads.dir; $('upWarn').className = 'msg warn'; $('upWarn').textContent = '⚠️ ' + d.uploads.warning; }
+    $('alertsCard').style.display = d.alerts.length ? 'block' : 'none';
+    $('alertsList').innerHTML = d.alerts.map(function (a) { return '<li>' + esc(a.message) + ' <span class="small">(' + fmt(a.ts) + ')</span></li>'; }).join('');
+    var errs = d.errors.failing.map(function (f) { return esc(f.collection + '/' + f.id + ': ' + f.message) + ' (tentativas: ' + f.attempts + ')'; }).concat(d.errors.events.map(function (e) { return fmt(e.ts) + ' — ' + esc(e.message); }));
+    $('errorsCard').style.display = errs.length ? 'block' : 'none'; $('errorsList').innerHTML = errs.map(function (e) { return '<li>' + e + '</li>'; }).join('');
+
+    $('unitsBody').innerHTML = d.units.map(function (u) { return '<tr><td><b>' + esc(u.name) + '</b></td><td class="small">' + esc(u.region) + '</td><td class="r">' + tag(u) + '</td></tr>'; }).join('') || '<tr><td colspan="3" class="small">Nenhuma unidade cadastrada.</td></tr>';
+    $('reqBody').innerHTML = d.requirements.map(function (r) { return '<tr><td>' + esc(r.name) + ' <span class="small">' + esc(r.category) + '</span></td><td class="r">' + tag(r) + '</td></tr>'; }).join('') || '<tr><td colspan="2" class="small">Nenhum requisito.</td></tr>';
+    $('foot').textContent = 'Servidor ligado há ' + Math.round(d.uptimeSec / 60) + ' min · versão ' + d.version + (d.dataset === 'demo' ? ' · BANCO DE DEMONSTRAÇÃO' : '');
+  }
+
+  function load() {
+    return api('summary').then(function (r) {
+      if (r.status === 401 || r.status === 403) { $('down').style.display = 'none'; if (r.body.code === 'PIN_NOT_CONFIGURED') { $('heroTitle').textContent = 'PIN não configurado'; $('heroDetail').textContent = r.body.error; } else needPin(pin ? 'PIN incorreto' : ''); return; }
+      if (r.status === 429) { needPin(r.body.error); return; }
+      if (r.status !== 200) throw new Error('HTTP ' + r.status);
+      failures = 0; lastOk = Date.now(); skew = r.body.serverTime - Date.now(); $('down').style.display = 'none'; $('pin').style.display = 'none'; render(r.body);
+    }).catch(function () { if (++failures >= 2) $('down').style.display = 'block'; });
+  }
+
+  function runSync(path, btn, busyText, idleText) {
+    var box = $('syncMsg'); $('btnSync').disabled = true; $('btnPull').disabled = true; btn.textContent = busyText; box.className = 'msg';
+    api(path, { method: 'POST', body: '{}' }).then(function (r) {
+      var b = r.body;
+      if (r.status !== 200) { box.className = 'msg err'; box.textContent = '❌ Não foi possível sincronizar: ' + (b.error || 'erro ' + r.status); }
+      else if (b.offline) { box.className = 'msg warn'; box.textContent = '📡 ' + b.message; }
+      else if (!b.ok) { box.className = 'msg err'; box.textContent = '❌ ' + b.message + (b.errors && b.errors[0] && b.errors[0].message ? ' Motivo: ' + b.errors[0].message : ''); }
+      else { box.className = 'msg ok'; box.textContent = '✅ ' + b.message; }
+      if (b.alerts && b.alerts.length) box.textContent += ' ⚠️ Atenção: ' + b.alerts.length + ' aviso(s) sobre pontos que já estavam cadastrados (veja abaixo).';
+      if (b.summary) render(b.summary); else load();
+    }).catch(function () { box.className = 'msg err'; box.textContent = '❌ Não consegui falar com o servidor.'; }).then(function () { btn.textContent = idleText; $('btnSync').disabled = false; $('btnPull').disabled = false; });
+  }
+  $('btnSync').onclick = function () { runSync('sync-now', $('btnSync'), '⏳ Sincronizando…', '🔄 Sincronizar agora'); };
+  $('btnPull').onclick = function () { runSync('pull-now', $('btnPull'), '⏳ Atualizando…', '⬇️ Atualizar dados da nuvem'); };
+  $('btnBackup').onclick = function () {
+    var box = $('backupMsg'), btn = $('btnBackup'); btn.disabled = true; btn.textContent = '⏳ Gerando…'; box.className = 'msg';
+    fetch('/status/api/backup', { headers: { 'X-Status-Pin': pin } }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var name = (/filename="?([^";]+)"?/.exec(r.headers.get('Content-Disposition') || '') || [])[1] || 'campori-backup.db';
+      return r.blob().then(function (b) { var a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; document.body.appendChild(a); a.click(); a.remove(); box.className = 'msg ok'; box.textContent = '✅ Backup gerado e baixado: ' + name + ' (cópia também em backups/).'; });
+    }).catch(function (e) { box.className = 'msg err'; box.textContent = '❌ Não foi possível gerar o backup: ' + e.message; })
+      .then(function () { btn.disabled = false; btn.textContent = '💾 Baixar backup agora'; load(); });
+  };
+  $('btnAck').onclick = function () { api('ack', { method: 'POST', body: '{}' }).then(load); };
+  $('pinOk').onclick = function () { pin = $('pinInput').value; try { sessionStorage.setItem('statusPin', pin); } catch (e) {} load(); };
+  $('pinInput').onkeydown = function (e) { if (e.key === 'Enter') $('pinOk').click(); };
+
+  setInterval(function () { if (lastOk) $('updated').textContent = 'Atualizado ' + ago(lastOk); }, 1000);
+  load(); setInterval(load, 4000);
+})();
+</script>
+</body>
+</html>

@@ -3,7 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Entrar — Campori de Líderes APV</title>
+  <title>Entrar — ÍNTEGROS · III Campori de Líderes APV</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon/favicon-16.png">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0D2B6E">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="ÍNTEGROS">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="apple-touch-icon" sizes="180x180" href="/assets/pwa/apple-touch-icon.png">
+  <script src="/js/pwa.js" defer></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="../css/base.css">
 </head>
@@ -17,11 +27,16 @@
 
 <script type="module">
 import { guardLogin, saveSession, portalUrlForUser } from '../js/auth.js';
-import { loginUser, ensureInitialAdmin, toast } from '../js/api.js';
+import { loginUser, ensureInitialAdmin, toast, fetchPublicRanking, renderAnonRanking } from '../js/api.js';
+import { withTimeout } from '../js/net.js';
+import { loadAnonRanking, rankingStampHtml } from '../js/ranking.js';
+import { mountPortalBar } from '../js/portalBar.js';
+mountPortalBar({ showSync: false });   // só versão/atualizar app e estado do servidor (ainda sem login)
 
 const app = document.getElementById('app');
 let loading = false;
 let firstRunPwd = null;
+let rankingHtml = null;
 
 // Se já autenticado, redireciona imediatamente para o portal
 if (guardLogin()) {
@@ -31,18 +46,32 @@ if (guardLogin()) {
 }
 
 async function init() {
+  // Renderiza JÁ (o app precisa abrir mesmo sem rede / com a rede pendurada); as chamadas
+  // à nuvem rodam em segundo plano e atualizam a tela quando (e se) responderem.
+  render();
   try {
     firstRunPwd = await ensureInitialAdmin();
+    if (firstRunPwd) render();
   } catch (e) {
     console.warn('Erro ao verificar usuários:', e);
+  }
+  try {
+    // servidor local quando o aparelho está na rede do evento; nuvem (Firestore) caso contrário; cópia guardada sem rede
+    const info = await loadAnonRanking({ fallback: fetchPublicRanking });
+    rankingHtml = renderAnonRanking(info.rows) + rankingStampHtml(info);
+  } catch (e) {
+    console.warn('Erro ao carregar ranking público:', e);
   }
   render();
 }
 
 function render() {
+  // re-renders (ranking/admin chegando da rede) não podem apagar o que a pessoa já digitou
+  const keep = { u: document.getElementById('login-user'), p: document.getElementById('login-pwd') };
+  const saved = { u: keep.u?.value, p: keep.p?.value, focus: document.activeElement?.id };
   app.innerHTML = `
   <div style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;
-    padding:1.5rem;background:linear-gradient(160deg,#1e3a8a 0%,#1d4ed8 60%,#2563eb 100%);">
+    padding:1.5rem;background:linear-gradient(160deg,#0D2B6E 0%,#123a8f 55%,#1ABFCF 100%);">
 
     ${firstRunPwd ? `
     <div style="background:#fef9c3;color:#713f12;border-radius:1rem;padding:1rem 1.25rem;
@@ -53,10 +82,10 @@ function render() {
       <div style="font-size:.75rem;margin-top:.375rem;color:#92400e;">Guarde estas credenciais antes de continuar!</div>
     </div>` : ''}
 
-    <div style="text-align:center;margin-bottom:2rem;">
-      <div style="font-size:3.5rem;margin-bottom:.5rem;">⛺</div>
-      <h1 style="font-size:1.6rem;font-weight:800;color:#fff;margin:0;">Campori de Líderes</h1>
-      <p style="color:#93c5fd;font-size:.9rem;margin:.25rem 0 0;">APV — Sistema de Pontuação</p>
+    <div style="text-align:center;margin-bottom:1.5rem;">
+      <img src="/assets/logo-integros-completo.png" alt="ÍNTEGROS — III Campori de Líderes APV"
+        style="height:11rem;width:auto;object-fit:contain;filter:drop-shadow(0 6px 18px rgba(0,0,0,.35));margin-bottom:.25rem;">
+      <p style="color:rgba(255,255,255,.75);font-size:.78rem;margin:.1rem 0 0;">Associação Paulista do Vale</p>
     </div>
 
     <div style="background:#fff;border-radius:1.5rem;padding:2rem;width:100%;max-width:340px;">
@@ -74,14 +103,28 @@ function render() {
             onkeydown="if(event.key==='Enter')W.doLogin()">
         </div>
         <button onclick="W.doLogin()" id="btn-login" ${loading ? 'disabled' : ''}
-          style="width:100%;background:#1e3a8a;color:#fff;border:none;padding:1.1rem;
+          style="width:100%;background:#D4A017;color:#1e293b;border:none;padding:1.1rem;
           border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;margin-top:.25rem;
           opacity:${loading ? .6 : 1};">
           ${loading ? '⏳ Entrando...' : '🔐 Entrar'}
         </button>
       </div>
     </div>
+
+    ${rankingHtml ? `
+    <div style="background:rgba(255,255,255,.95);border-radius:1.25rem;padding:1.25rem;width:100%;max-width:340px;margin-top:1.25rem;">
+      <div style="font-weight:800;color:#1e293b;font-size:.9rem;margin-bottom:.75rem;text-align:center;">🏆 Ranking Geral das Unidades</div>
+      ${rankingHtml}
+    </div>` : ''}
+
+    <div style="display:flex;align-items:center;gap:.5rem;margin-top:1.75rem;opacity:.85;">
+      <img src="/assets/logo-apv.png" alt="APV" style="height:1.6rem;width:auto;object-fit:contain;">
+      <span style="color:rgba(255,255,255,.75);font-size:.72rem;">Um evento da Associação Paulista do Vale</span>
+    </div>
   </div>`;
+  if (saved.u) document.getElementById('login-user').value = saved.u;
+  if (saved.p) document.getElementById('login-pwd').value = saved.p;
+  if (saved.focus) document.getElementById(saved.focus)?.focus();
 }
 
 window.W = {
@@ -92,8 +135,8 @@ window.W = {
     loading = true;
     render();
     try {
-      const user = await loginUser(username, password);
-      saveSession(user);
+      const { user, token } = await loginUser(username, password);
+      saveSession(user, token);
       location.replace(portalUrlForUser(user));
     } catch (e) {
       toast(e.message, 'error');

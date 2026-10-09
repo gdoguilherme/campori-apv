@@ -1,32 +1,52 @@
 import {
-  db, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, setDoc,
+  db, collection, doc, addDoc, updateDoc, deleteDoc, setDoc, getDocs,
   query, where, orderBy, onSnapshot, serverTimestamp
 } from './firebase.js';
+import { CLOUD_URL, TIMEOUTS, LOCAL_APP } from './config.js';
+import { resolveProof } from '../shared/proof.js';
+import { fetchJson, serverFetch, HttpError, NetError } from './net.js';
+import { normalizeUniformInspection, computeUniformPoints } from '../shared/uniforme.js';
+import { reqFilledBy, computeUnitScores, computeStars, findQrDuplicate, DISCIPLINE_POINTS } from '../shared/scoring.js';
+
+// Regras de pontuação vivem em shared/scoring.js (também usado pelo servidor local offline)
+export { reqFilledBy, computeUnitScores, computeStars, findQrDuplicate, DISCIPLINE_POINTS };
 
 // ── CONSTANTES ─────────────────────────────────────────────────
 
-export const REGIONS = [
-  { id: '001R1',  name: '1ª Região'  }, { id: '002R2',  name: '2ª Região'  },
-  { id: '003R3',  name: '3ª Região'  }, { id: '004R4',  name: '4ª Região'  },
-  { id: '005R5',  name: '5ª Região'  }, { id: '006R6',  name: '6ª Região'  },
-  { id: '007R7',  name: '7ª Região'  }, { id: '008R8',  name: '8ª Região'  },
-  { id: '009R9',  name: '9ª Região'  }, { id: '010R10', name: '10ª Região' },
-  { id: '011R11', name: '11ª Região' }, { id: '012R12', name: '12ª Região' },
-  { id: '013R13', name: '13ª Região' }, { id: '014R14', name: '14ª Região' },
-  { id: '015R15', name: '15ª Região' }, { id: '016R16', name: '16ª Região' },
-];
+// Cache dinâmico — atualizado pelo subRegions; inicia vazio (sem hardcode)
+let _regionCache = [];
+export const setRegionCache = regions => { _regionCache = regions; };
 
 export const CATEGORIES = ['ADM','Nas Casas','Nos Templos','Nas Ruas','Acampamento','Cozinha','Saúde','Eventos','Outros'];
 export const PHASES = ['Pré-Requisito','No Campori'];
 // 'judge' mantido no DB para retrocompatibilidade; exibido como 'Fiscal de Prova'
-export const ROLES = { superadmin:'Super Admin', admin:'Administrador', approver:'Aprovador', judge:'Fiscal de Prova', region:'Região' };
+export const ROLES = { superadmin:'Super Admin', admin:'Administrador', approver:'Aprovador', judge:'Fiscal de Prova', region:'Região', counselor:'Conselheiro' };
 export const COMP_CATS = ['Ambos','DBV','AVT'];
+// Área de Atuação do requisito (independente da Categoria) — onde o participante atua no Campori
+export const AREAS_ATUACAO = ['Administração','Nas Casas','Templos e Ruas','Acampamento','Cozinha','Saúde','Outras'];
+// Quem preenche/envia o requisito — substitui o antigo `evaluatedBy` ('both'|'fiscal'|'region')
+export const FILLED_BY = { regional: 'Regional', conselheiro: 'Conselheiro', fiscal: 'Só Fiscal' };
 export const SCORE_PCTS = [0, 30, 50, 70, 100];
-export const UPLOAD_SERVER = 'https://campori-apv-upload.fly.dev';
+export const UPLOAD_SERVER = CLOUD_URL; // mesmo servidor Express (Fly.io) hospeda upload + autenticação/usuários
+
+// Chamada JSON autenticada (opcional) ao backend — sempre com timeout (nunca fica pendurada).
+// via 'cloud' (padrão): sempre a nuvem — é onde vivem os dados do Firestore (CRUD de usuários/regiões,
+//   troca de senha), então NÃO pode ir parar no servidor local por engano.
+// via 'auto': servidor local primeiro (timeout curto) e nuvem como reserva — login e sync do Conselheiro.
+async function apiFetch(path, { method = 'GET', body, token, timeout = TIMEOUTS.api, via = 'cloud' } = {}) {
+  if (via === 'auto') return serverFetch(path, { method, body, token, timeout });
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const { ok, status, data } = await fetchJson(`${CLOUD_URL}${path}`, {
+    method, headers, body: body !== undefined ? JSON.stringify(body) : undefined
+  }, timeout);
+  if (!ok) throw new HttpError(status, data);
+  return data;
+}
 
 // ── HELPERS ────────────────────────────────────────────────────
 
-export const rname = id => REGIONS.find(r => r.id === id)?.name || id;
+export const rname = id => _regionCache.find(r => r.id === id)?.name || id;
 
 export function fmtDate(ts) {
   if (!ts) return '—';
@@ -54,9 +74,9 @@ export function toast(msg, type = 'success') {
   setTimeout(() => t.remove(), 3500);
 }
 
-export function showBanner(msg) {
+export function showBanner(msg, color = '#15803d') {
   const b = document.createElement('div');
-  b.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:998;background:#15803d;color:#fff;
+  b.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:998;background:${color};color:#fff;
     text-align:center;padding:1.1rem 1rem;font-size:1rem;font-weight:800;
     box-shadow:0 4px 20px rgba(0,0,0,.2);animation:slideDown .3s ease;`;
   b.innerHTML = msg;
@@ -79,7 +99,12 @@ export function genPassword(len = 8) {
   return Array.from({ length: len }, () => c[Math.floor(Math.random() * c.length)]).join('');
 }
 
-export function proofBlock(url, context = 'queue') {
+export function proofBlock(rawUrl, context = 'queue') {
+  const proof = resolveProof(rawUrl, { isLocalApp: LOCAL_APP, origin: typeof location !== 'undefined' ? location.origin : '' });
+  if (proof.kind === 'pc-only') return `<div style="height:64px;background:#fffbeb;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;color:#92400e;font-size:.82rem;font-weight:600;text-align:center;padding:.25rem;">
+    📍 Foto disponível apenas no PC do evento<span style="font-weight:400;font-size:.7rem;">arquivo: ${String(proof.name || '').replace(/[<>&"]/g, '')}</span></div>`;
+  const url = proof.kind === 'none' ? null : proof.src;
   if (!url) return `<div style="height:52px;background:#f8fafc;display:flex;align-items:center;
     justify-content:center;color:#94a3b8;font-size:.82rem;">Sem arquivo anexado</div>`;
   const isPdf = url.toLowerCase().includes('.pdf') || url.includes('/file/d/');
@@ -102,7 +127,49 @@ export function proofBlock(url, context = 'queue') {
   </div>`;
 }
 
+// Paridade com a versão do modo local: na nuvem o Firestore já atualiza em tempo real
+export async function refreshNow() {}
+
 // ── SUBSCRIPTIONS ─────────────────────────────────────────────
+
+export function subRegions(onUpdate) {
+  const q = query(collection(db, 'regions'), orderBy('name', 'asc'));
+  return onSnapshot(q,
+    snap => onUpdate(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+    err => toast('Erro ao carregar regiões: ' + err.message, 'error')
+  );
+}
+
+export function subParticipants(onUpdate) {
+  return onSnapshot(collection(db, 'participants'),
+    snap => onUpdate(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+    err => toast('Erro ao carregar participantes: ' + err.message, 'error')
+  );
+}
+
+export function subUnits(onUpdate) {
+  return onSnapshot(collection(db, 'units'),
+    snap => onUpdate(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+    err => toast('Erro ao carregar unidades: ' + err.message, 'error')
+  );
+}
+
+// Usado pelo portal do Conselheiro (uma única unidade em tempo real)
+export function subUnitById(unitId, onUpdate) {
+  return onSnapshot(doc(db, 'units', unitId),
+    snap => onUpdate(snap.exists() ? { id: snap.id, ...snap.data() } : null),
+    err => toast('Erro ao carregar unidade: ' + err.message, 'error')
+  );
+}
+
+// Usado pelo portal do Conselheiro (participantes só da unidade dele)
+export function subParticipantsByUnit(unitId, onUpdate) {
+  const q = query(collection(db, 'participants'), where('unitId', '==', unitId));
+  return onSnapshot(q,
+    snap => onUpdate(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+    err => toast('Erro ao carregar participantes: ' + err.message, 'error')
+  );
+}
 
 export function subReqs(onUpdate) {
   const q = query(collection(db, 'requirements'), orderBy('order', 'asc'));
@@ -123,36 +190,44 @@ export function subSubs(regionId, onUpdate) {
   }, err => toast('Erro ao carregar dados: ' + err.message, 'error'));
 }
 
-export function subUsers(onUpdate) {
-  return onSnapshot(collection(db, 'users'),
-    snap => onUpdate(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
-    err => toast('Erro ao carregar usuários: ' + err.message, 'error')
-  );
+// Usado pelo portal do Conselheiro — submissions só da unidade dele (não da região toda,
+// que pode ter até 3 unidades com conselheiros diferentes)
+export function subSubsByUnit(unitId, onUpdate) {
+  const q = query(collection(db, 'submissions'), where('unitId', '==', unitId));
+  return onSnapshot(q, snap => {
+    const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    docs.sort((a, b) => (b.submittedAt?.seconds || 0) - (a.submittedAt?.seconds || 0));
+    onUpdate(docs);
+  }, err => toast('Erro ao carregar dados: ' + err.message, 'error'));
+}
+
+// A coleção `users` não é mais lida em tempo real pelo client (regra do Firestore
+// nega leitura/escrita direta — ver firestore.rules). O painel admin busca a lista
+// via este endpoint (backend, Firebase Admin SDK) e recarrega após cada mutação.
+export async function fetchUsers(token) {
+  return apiFetch('/users', { token });
 }
 
 // ── AUTH ──────────────────────────────────────────────────────
 
+// Login e verificação de senha (bcrypt) acontecem no backend — retorna { user, token }
 export async function loginUser(username, password) {
-  const snap = await getDocs(query(collection(db, 'users'), where('username', '==', username.toLowerCase().trim())));
-  if (snap.empty) throw new Error('Usuário não encontrado');
-  const user = { id: snap.docs[0].id, ...snap.docs[0].data() };
-  if (user.password !== password) throw new Error('Senha incorreta');
-  if (user.active === false) throw new Error('Usuário inativo');
-  return user;
+  const body = { username, password };
+  try {
+    return await apiFetch('/users/login', { method: 'POST', body, via: 'auto' });
+  } catch (e) {
+    // servidor local no ar, mas o usuário foi criado na nuvem depois da última cópia → tenta a nuvem
+    if (e instanceof HttpError && e.status === 401 && /não encontrado/i.test(e.message)) {
+      try { return await apiFetch('/users/login', { method: 'POST', body }); } catch (e2) { if (!(e2 instanceof NetError)) throw e2; }
+    }
+    throw e;
+  }
 }
 
 // Cria admin inicial se não houver nenhum usuário; retorna a senha gerada ou null
 export async function ensureInitialAdmin() {
-  const snap = await getDocs(collection(db, 'users'));
-  if (snap.empty) {
-    const pwd = genPassword();
-    await setDoc(doc(db, 'users', 'initial-admin'), {
-      name: 'Super Admin', phone: '', username: 'admin', password: pwd,
-      role: 'superadmin', active: true, createdAt: serverTimestamp()
-    });
-    return pwd;
-  }
-  return null;
+  const { created, password } = await apiFetch('/users/ensure-initial-admin', { method: 'POST' });
+  return created ? password : null;
 }
 
 // ── SUBMISSIONS ───────────────────────────────────────────────
@@ -162,6 +237,7 @@ export async function addSubmission(user, req, notes, proofUrl = null) {
   const rid = user.regionId;
   const ref = await addDoc(collection(db, 'submissions'), {
     regionId: rid, regionName: rname(rid),
+    unitId: user.unitId || null, // presente quando o envio vem do portal do Conselheiro
     requirementId: req.id, requirementName: req.name,
     requirementPoints: req.points, requirementCategory: req.category,
     competitionCategory: req.competitionCategory || 'Ambos',
@@ -198,7 +274,7 @@ export async function review(subId, status, reason, currentUser) {
 
 // V3: fiscal cria/atualiza sugestão pending (admin aprova)
 // existingSubId: id da submission existente do fiscal para esta região+req, ou null
-export async function doFiscalSuggestion(req, regionId, totalPts, subItemScores, subItemPcts, currentUser, existingSubId) {
+export async function doFiscalSuggestion(req, regionId, totalPts, subItemScores, subItemPcts, currentUser, existingSubId, unitId = null) {
   const baseData = {
     requirementPoints: totalPts,
     subItemScores: subItemScores || null,
@@ -215,6 +291,7 @@ export async function doFiscalSuggestion(req, regionId, totalPts, subItemScores,
   } else {
     await addDoc(collection(db, 'submissions'), {
       regionId, regionName: rname(regionId),
+      unitId: unitId || null, // presente quando o fiscal avalia um requisito tipo Conselheiro
       requirementId: req.id, requirementName: req.name,
       requirementCategory: req.category,
       competitionCategory: req.competitionCategory || 'Ambos',
@@ -225,6 +302,31 @@ export async function doFiscalSuggestion(req, regionId, totalPts, subItemScores,
     });
   }
   toast(`✅ ${req.name} — ${totalPts} pts (aguardando aprovação)`);
+}
+
+// Inspeção de uniforme (nuvem): mesma regra única de shared/uniforme.js; fica PENDENTE para o admin aprovar.
+// Reavaliar a mesma unidade atualiza a submission existente (a mais recente vale, sem duplicar pontos).
+export async function doUniformInspection(req, unit, inspection, currentUser, existingSubId = null) {
+  const norm = normalizeUniformInspection(inspection);
+  const pts = computeUniformPoints(norm.erros, req).pontos;
+  const baseData = {
+    requirementPoints: pts, subItemScores: null, subItemPcts: null, status: 'pending', fiscalSuggestion: true,
+    notes: `Avaliado por: ${currentUser.name}`, submittedAt: serverTimestamp(),
+    submittedBy: currentUser.username, submittedByName: currentUser.name,
+    uniformInspection: { ...norm, avaliadorId: currentUser.id, avaliadorNome: currentUser.name, avaliadoEm: Date.now() }
+  };
+  if (existingSubId) {
+    await updateDoc(doc(db, 'submissions', existingSubId), baseData);
+  } else {
+    await addDoc(collection(db, 'submissions'), {
+      regionId: unit.regionId, regionName: rname(unit.regionId), unitId: unit.id,
+      requirementId: req.id, requirementName: req.name, requirementCategory: req.category,
+      competitionCategory: req.competitionCategory || 'Ambos', proofUrl: null, source: 'judge',
+      requirementDeadlineSnapshot: req.deadline || null, ...baseData
+    });
+  }
+  toast(`✅ ${req.name} — ${pts} pts (aguardando aprovação)`);
+  return { points: pts };
 }
 
 // ── REQUIREMENTS ──────────────────────────────────────────────
@@ -244,27 +346,153 @@ export async function delReq(id) {
 
 // ── USERS ─────────────────────────────────────────────────────
 
-export async function createUser(data, currentUser) {
-  const snap = await getDocs(query(collection(db, 'users'), where('username', '==', data.username)));
-  if (!snap.empty) throw new Error('Este usuário já existe');
-  await addDoc(collection(db, 'users'), {
-    ...data,
-    active: true,
-    createdAt: serverTimestamp(),
-    createdBy: currentUser?.username || 'system'
+export async function createUser(data, token) {
+  return apiFetch('/users', { method: 'POST', token, body: data }); // { id, username, password }
+}
+
+export async function updateUser(id, data, token) {
+  return apiFetch(`/users/${id}`, { method: 'PATCH', token, body: data });
+}
+
+// currentPassword: exigido no autoatendimento (troca pelo próprio usuário); admin pode omitir
+export async function updatePassword(userId, newPassword, token, currentPassword) {
+  return apiFetch(`/users/${userId}/password`, {
+    method: 'POST', token, body: { newPassword, ...(currentPassword ? { currentPassword } : {}) }
   });
 }
 
-export async function updateUser(id, data) {
-  await updateDoc(doc(db, 'users', id), data);
+export async function toggleUserActive(id, currentlyActive, token) {
+  return apiFetch(`/users/${id}/active`, { method: 'PATCH', token, body: { active: !currentlyActive } });
 }
 
-export async function updatePassword(userId, newPassword) {
-  await updateDoc(doc(db, 'users', userId), { password: newPassword });
+export async function deleteUser(id, token) {
+  return apiFetch(`/users/${id}`, { method: 'DELETE', token });
 }
 
-export async function toggleUserActive(id, currentlyActive) {
-  await updateDoc(doc(db, 'users', id), { active: !currentlyActive });
+// ── REGIONS ───────────────────────────────────────────────────
+// (username/slugify agora vivem no backend — ver server/routes/users.js)
+
+// Cria a região e o usuário/login vinculado automaticamente (login a partir do nome do responsável)
+export async function createRegion(data, token) {
+  const regRef = await addDoc(collection(db, 'regions'), {
+    name: data.name, responsible: data.responsible || '', responsiblePhone: data.responsiblePhone || '',
+    competitionCategory: data.competitionCategory, active: true
+  });
+  const { username, password } = await apiFetch('/users', {
+    method: 'POST', token,
+    body: {
+      name: data.name, phone: data.responsiblePhone || '', password: data.password,
+      usernameSeed: data.responsible || data.name,
+      role: 'region', regionId: regRef.id, competitionCategory: data.competitionCategory
+    }
+  });
+  return { id: regRef.id, username, password };
+}
+
+// Atualiza a região e sincroniza nome/modalidade/status do usuário vinculado.
+// password: só é enviada (e trocada) se o admin explicitamente preencheu o campo.
+export async function updateRegion(id, data, linkedUserId, password, token) {
+  await updateDoc(doc(db, 'regions', id), data);
+  if (linkedUserId) {
+    await apiFetch(`/users/${linkedUserId}`, {
+      method: 'PATCH', token,
+      body: { name: data.name, competitionCategory: data.competitionCategory, active: data.active }
+    });
+    if (password) {
+      await apiFetch(`/users/${linkedUserId}/password`, { method: 'POST', token, body: { newPassword: password } });
+    }
+  }
+}
+
+// Exclui a região e o usuário vinculado
+export async function delRegion(id, linkedUserId, token) {
+  await deleteDoc(doc(db, 'regions', id));
+  if (linkedUserId) await apiFetch(`/users/${linkedUserId}`, { method: 'DELETE', token });
+}
+
+// Perfil auto-editável pela própria região: nome de guerra, logo, informações extras
+export async function updateRegionProfile(regionId, data) {
+  await updateDoc(doc(db, 'regions', regionId), data);
+}
+
+// ── QR CODE (provas físicas) ───────────────────────────────────
+// O hash é gerado e validado no backend (server/routes/qr.js) — nunca no
+// client, pra um QR impresso não poder ser forjado.
+
+// requirement pode ter várias variantes de QR (qrVariants: [{id,label,points}]) —
+// cada uma gera um hash próprio, assinado sobre (requirementId, variantId, points)
+export async function generateQrPayload(requirementId, variantId, points, token) {
+  return apiFetch('/qr/generate', { method: 'POST', token, body: { requirementId, variantId, points } });
+}
+
+// Registro de pontuação por QR Code: ver js/scanQueue.js (fila offline + POST /sync/scans).
+// A validação do hash e a trava de duplicidade acontecem no servidor, na sincronização.
+
+// ── PARTICIPANTS ──────────────────────────────────────────────
+
+export async function createParticipant(data) {
+  await addDoc(collection(db, 'participants'), {
+    name: data.name, club: data.club || '', regionId: data.regionId,
+    competitionCategory: data.competitionCategory, unitId: data.unitId || null,
+    createdAt: serverTimestamp()
+  });
+}
+
+export async function updateParticipant(id, data) {
+  await updateDoc(doc(db, 'participants', id), data);
+}
+
+export async function deleteParticipant(id) {
+  await deleteDoc(doc(db, 'participants', id));
+}
+
+// Import em massa (CSV/Excel já parseado no client) — grava sequencialmente,
+// retorna quantos foram criados com sucesso
+export async function createParticipantsBulk(list) {
+  let count = 0;
+  for (const p of list) {
+    await createParticipant(p);
+    count++;
+  }
+  return count;
+}
+
+// ── UNITS ─────────────────────────────────────────────────────
+// Unidades são mistas (participantes DBV e AVT juntos) e podem receber
+// participantes de outras regiões ("clube amigo"). A lista de membros é
+// derivada de participant.unitId — não existe um array participantIds
+// redundante no doc da unidade, pra não correr risco dos dois lados
+// saírem de sincronia.
+
+export async function createUnit(data) {
+  const ref = await addDoc(collection(db, 'units'), {
+    name: data.name, warCry: data.warCry || '', regionId: data.regionId,
+    counselorId: null, createdAt: serverTimestamp()
+  });
+  return ref.id;
+}
+
+export async function updateUnit(id, data) {
+  await updateDoc(doc(db, 'units', id), data);
+}
+
+// Exclui a unidade e desaloca (unitId = null) os participantes que estavam nela
+export async function deleteUnit(id, participantIds) {
+  await deleteDoc(doc(db, 'units', id));
+  for (const pid of participantIds) {
+    await updateDoc(doc(db, 'participants', pid), { unitId: null });
+  }
+}
+
+// Aloca (ou remove, com unitId = null) um participante a uma unidade
+export async function allocateParticipant(participantId, unitId) {
+  await updateDoc(doc(db, 'participants', participantId), { unitId });
+}
+
+// ── SUBMISSIONS ───────────────────────────────────────────────
+
+export async function deleteSubmission(id) {
+  await deleteDoc(doc(db, 'submissions', id));
 }
 
 // ── UPLOAD ────────────────────────────────────────────────────
@@ -274,38 +502,72 @@ export async function uploadFile(file, regionId, reqCode) {
   fd.append('file', file);
   fd.append('reqCode', reqCode || 'geral');
   fd.append('regionId', regionId || 'geral');
-  const res = await fetch(`${UPLOAD_SERVER}/upload`, { method: 'POST', body: fd });
-  const data = await res.json();
-  if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+  const { ok, status, data } = await fetchJson(`${UPLOAD_SERVER}/upload`, { method: 'POST', body: fd }, TIMEOUTS.upload);
+  if (!ok || data.error) throw new Error(data.error || `HTTP ${status}`);
   return data.url;
 }
 
 // ── SCORING ───────────────────────────────────────────────────
 
-export function computeScores(submissions, requirements, users, catFilter = 'Todos') {
-  const scores = {};
-  REGIONS.forEach(r => { scores[r.id] = { name: r.name, total: 0, count: 0, compCat: null }; });
-  users.forEach(u => {
-    if (u.role === 'region' && u.regionId && u.competitionCategory && scores[u.regionId])
-      scores[u.regionId].compCat = u.competitionCategory;
+// ── ESTRELAS / RANKING ANÔNIMO ─────────────────────────────────
+
+// HTML do ranking anônimo (posição + pontos + estrelas, sem nome/região) —
+// reaproveitado no login, portal da região e portal do conselheiro
+export function renderAnonRanking(scores, limit = 10) {
+  const withPts = scores.filter(s => s.total > 0);
+  if (withPts.length === 0) {
+    return `<p style="text-align:center;color:#94a3b8;font-size:.85rem;padding:1rem 0;">Ainda sem pontuação registrada</p>`;
+  }
+  const max = withPts[0].total;
+  return withPts.slice(0, limit).map((s, i) => {
+    const stars = computeStars(s.total, max);
+    return `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;
+      padding:.625rem .875rem;border-radius:.75rem;background:${i < 3 ? '#f0fdf4' : '#f8fafc'};margin-bottom:.375rem;">
+      <span style="font-weight:700;color:#1e293b;font-size:.85rem;">${i + 1}º lugar</span>
+      <span style="font-weight:800;color:#166534;font-size:.85rem;">${s.total} pts</span>
+      <span style="font-size:.85rem;">${'⭐'.repeat(stars)}${'☆'.repeat(3 - stars)}</span>
+    </div>`;
+  }).join('');
+}
+
+// Leitura pontual (sem listener em tempo real) usada na tela de login, que não
+// mantém sessão nem precisa de atualização ao vivo — regions/submissions/units
+// já são coleções abertas no Firestore (ver firestore.rules)
+export async function fetchPublicRanking() {
+  const [subsSnap, unitsSnap, disciplineSnap] = await Promise.all([
+    getDocs(collection(db, 'submissions')),
+    getDocs(collection(db, 'units')),
+    getDocs(collection(db, 'disciplinaryActions'))
+  ]);
+  const submissions = subsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const units = unitsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const disciplinaryActions = disciplineSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return computeUnitScores(submissions, units, disciplinaryActions);
+}
+
+// ── DISCIPLINA ──────────────────────────────────────────────────
+// target: 'region' (desconta a região inteira + todas as suas unidades)
+// ou 'unit' (desconta só aquela unidade, sem afetar a região nem as demais)
+
+export function subDisciplinaryActions(onUpdate) {
+  return onSnapshot(collection(db, 'disciplinaryActions'),
+    snap => onUpdate(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+    err => toast('Erro ao carregar disciplina: ' + err.message, 'error')
+  );
+}
+
+// Idempotente: o id do documento vem do `clientId` do formulário (`disc_<clientId>`), o MESMO que o servidor local usa →
+// reenvio e sincronização local↔nuvem não duplicam o desconto. `origin` marca onde foi lançada (ver dedupeDisciplinaryActions).
+export async function createDisciplinaryAction(data, currentUser) {
+  const clientId = data.clientId || (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `c${Date.now()}${Math.random().toString(36).slice(2, 10)}`);
+  await setDoc(doc(db, 'disciplinaryActions', `disc_${clientId}`), {
+    targetType: data.targetType, targetId: data.targetId, targetName: data.targetName,
+    reason: data.reason, points: DISCIPLINE_POINTS, origin: 'cloud', clientId,
+    createdAt: serverTimestamp(), createdBy: currentUser?.username || 'admin', createdByName: currentUser?.name || 'Administrador'
   });
-  const counted = new Set();
-  [...submissions]
-    .filter(s => s.status === 'approved')
-    .sort((a, b) => (b.submittedAt?.seconds || 0) - (a.submittedAt?.seconds || 0))
-    .forEach(s => {
-      if (!scores[s.regionId]) return;
-      const key = `${s.regionId}:${s.requirementId}`;
-      if (counted.has(key)) return;
-      const req = requirements.find(r => r.id === s.requirementId);
-      const reqCat = req?.competitionCategory || 'Ambos';
-      if (catFilter === 'Todos' || reqCat === 'Ambos' || reqCat === catFilter) {
-        counted.add(key);
-        scores[s.regionId].total += s.requirementPoints || 0;
-        scores[s.regionId].count++;
-      }
-    });
-  let result = Object.entries(scores).map(([id, v]) => ({ id, ...v })).sort((a, b) => b.total - a.total);
-  if (catFilter !== 'Todos') result = result.filter(r => !r.compCat || r.compCat === catFilter);
-  return result;
+}
+
+export async function deleteDisciplinaryAction(id) {
+  await deleteDoc(doc(db, 'disciplinaryActions', id));
 }

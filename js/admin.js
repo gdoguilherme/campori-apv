@@ -1,27 +1,41 @@
-import { guardPage, logout as authLogout, saveSession, startExpiryWatcher } from './auth.js';
+import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatcher } from './auth.js';
 import {
-  subReqs, subSubs, subUsers,
-  rname, fmtDate, badge, toast, genPassword, proofBlock,
+  subReqs, subSubs, subRegions, setRegionCache, fetchUsers, subParticipants, subUnits,
+  rname, fmtDate, badge, toast, genPassword, proofBlock, reqFilledBy,
   review as apiReview, saveReq as apiSaveReq, delReq as apiDelReq,
   createUser, updateUser, updatePassword, toggleUserActive as apiToggleUser,
-  computeScores,
-  REGIONS, CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS
+  deleteUser as apiDeleteUser, deleteSubmission as apiDeleteSubmission,
+  createRegion as apiCreateRegion, updateRegion as apiUpdateRegion, delRegion as apiDelRegion,
+  createParticipant, updateParticipant, deleteParticipant as apiDeleteParticipant, createParticipantsBulk,
+  createUnit, updateUnit, deleteUnit as apiDeleteUnit, allocateParticipant,
+  computeUnitScores, computeStars,
+  subDisciplinaryActions, createDisciplinaryAction, deleteDisciplinaryAction as apiDeleteDiscipline, refreshNow,
+  CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS, AREAS_ATUACAO, FILLED_BY
 } from './api.js';
+import { loadIdentifiedRanking, rankingStampHtml } from './ranking.js';
+import { mountPortalBar } from './portalBar.js';
+import { UNIFORM_CATEGORIES, buildUniformCsv, computeUniformPoints } from '../shared/uniforme.js';
+import { dedupeDisciplinaryActions, findRecentSameInfraction, DISCIPLINE_DUP_WINDOW_MS } from '../shared/scoring.js';
 
 // ── ESTADO ────────────────────────────────────────────────────
 const S = {
   user: null,
   adminTab: 'queue',
-  requirements: [], submissions: [], users: [],
+  sidebarOpen: false,
+  requirements: [], submissions: [], users: [], regions: [], participants: [], units: [], disciplinaryActions: [],
   filterStatus: 'Todos',
-  rankingCat: 'Todos',
-  editingReq: null, editingUser: null,
-  formRole: 'region', generatedPwd: '',
+  participantFilterRegion: 'Todas', participantFilterCat: 'Todos',
+  unitFilterRegion: 'Todas', unitParticipantSearch: '', counselorUnitId: null,
+  disciplineTargetType: 'region', disciplineTargetId: '',
+  editingReq: null, editingUser: null, editingRegion: null, editingParticipant: null, editingUnit: null,
+  formRole: null, generatedPwd: '', createdCreds: null,
+  importRows: [], importErrors: [],
   photoUrl: null, modal: null,
   loading: false,
+  rankInfo: null,
 };
 
-let _unsubReqs = null, _unsubSubs = null, _unsubUsers = null;
+let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null, _unsubParticipants = null, _unsubUnits = null, _unsubDiscipline = null;
 
 // ── INIT ──────────────────────────────────────────────────────
 export function init() {
@@ -30,11 +44,40 @@ export function init() {
   S.user = user;
   startExpiryWatcher();
 
-  _unsubReqs  = subReqs(reqs   => { S.requirements = reqs;   render(); });
-  _unsubSubs  = subSubs(null, subs => { S.submissions = subs;  render(); });
-  _unsubUsers = subUsers(users  => { S.users = users;          render(); });
+  _unsubReqs    = subReqs(reqs     => { S.requirements = reqs;   render(); });
+  _unsubSubs    = subSubs(null, subs => { S.submissions = subs;  render(); });
+  _unsubRegions = subRegions(regs  => {
+    S.regions = regs;
+    setRegionCache(regs);
+    render();
+  });
+  _unsubParticipants = subParticipants(ps => { S.participants = ps; render(); });
+  _unsubUnits        = subUnits(units => { S.units = units; render(); });
+  _unsubDiscipline   = subDisciplinaryActions(actions => { S.disciplinaryActions = actions; render(); });
 
+  refreshUsers();
   render();
+  mountPortalBar({ getPending: async () => 0, syncNow: async () => { await refreshNow(); return { sent: 0 }; } });
+  setInterval(() => { if (S.adminTab === 'ranking') refreshRanking(); }, 30_000);   // só enquanto a aba Ranking está aberta
+}
+
+// Ranking identificado: do servidor LOCAL quando o aparelho está na rede do evento; senão, cálculo ao vivo da nuvem
+function refreshRanking() {
+  loadIdentifiedRanking({ token: getToken(), fallback: async () => computeUnitScores(S.submissions, S.units, S.disciplinaryActions) })
+    .then(info => { S.rankInfo = info; if (S.adminTab === 'ranking' && !S.modal) render(); })
+    .catch(() => {});
+}
+
+// A coleção `users` não é mais lida em tempo real (ver firestore.rules) — o painel
+// busca a lista sob demanda e recarrega após qualquer mutação de usuário/região.
+async function refreshUsers() {
+  if (!['superadmin', 'admin'].includes(S.user?.role)) return; // approver não gerencia usuários/regiões
+  try {
+    S.users = await fetchUsers(getToken());
+    render();
+  } catch (e) {
+    toast('Erro ao carregar usuários: ' + e.message, 'error');
+  }
 }
 
 // ── HELPERS ───────────────────────────────────────────────────
@@ -59,9 +102,9 @@ function exportExcel() {
     'Observações': s.notes || ''
   }));
   window.XLSX.utils.book_append_sheet(wb, window.XLSX.utils.json_to_sheet(rows), 'Comprovações');
-  const sc = computeScores(S.submissions, S.requirements, S.users);
+  const sc = computeUnitScores(S.submissions, S.units, S.disciplinaryActions);
   window.XLSX.utils.book_append_sheet(wb, window.XLSX.utils.json_to_sheet(
-    sc.map((s, i) => ({ 'Posição': i + 1, 'Região': s.name, 'Pontos Totais': s.total, 'Aprovações': s.count }))
+    sc.map((s, i) => ({ 'Posição': i + 1, 'Unidade': s.name, 'Região': rname(s.regionId), 'Pontos Totais': s.total, 'Aprovações': s.count }))
   ), 'Ranking');
   window.XLSX.writeFile(wb, `campori-${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
@@ -88,9 +131,17 @@ function render() {
   const el = document.getElementById('app');
   if (!el) return;
   let html = vAdmin();
-  if (S.modal === 'req-form')         html += mReqForm();
-  else if (S.modal === 'user-form')   html += mUserForm();
-  else if (S.modal === 'photo')       html += mPhoto();
+  if (S.modal === 'req-form')            html += mReqForm();
+  else if (S.modal === 'user-form')      html += mUserForm();
+  else if (S.modal === 'region-form')    html += mRegionForm();
+  else if (S.modal === 'participant-form')   html += mParticipantForm();
+  else if (S.modal === 'participant-import') html += mParticipantImport();
+  else if (S.modal === 'unit-form')          html += mUnitForm();
+  else if (S.modal === 'unit-participants')  html += mUnitParticipants();
+  else if (S.modal === 'counselor-form')     html += mCounselorForm();
+  else if (S.modal === 'discipline-form')    html += mDisciplineForm();
+  else if (S.modal === 'credentials')    html += mCredentialsModal();
+  else if (S.modal === 'photo')          html += mPhoto();
   else if (S.modal === 'change-password') html += mChangePassword();
   el.innerHTML = html;
 }
@@ -103,53 +154,109 @@ function vAdmin() {
     ...(isAdmin() ? [{ id: 'requirements', label: '⚙️ Requisitos' }] : []),
     { id: 'history',      label: '📂 Histórico' },
     ...(isAdmin() ? [
-      { id: 'dashboard',  label: '📊 Dashboard' },
-      { id: 'ranking',    label: '🏆 Ranking'   },
+      { id: 'dashboard',    label: '📊 Dashboard' },
+      { id: 'ranking',      label: '🏆 Ranking'   },
+      { id: 'participants', label: '👥 Participantes' },
+      { id: 'units',        label: '🏕️ Unidades' },
+      { id: 'discipline',   label: '⚠️ Disciplina' },
     ] : []),
-    ...(isSuperAdmin() ? [{ id: 'users', label: '👥 Usuários' }] : []),
+    ...(isSuperAdmin() ? [
+      { id: 'regions', label: '🗺️ Regiões' },
+      { id: 'users',   label: '👥 Usuários' },
+    ] : []),
   ];
 
   return `
-  <div style="min-height:100dvh;background:#f0f4f8;">
-    <div style="background:linear-gradient(135deg,#14532d,#166534);color:#fff;padding:1rem;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <div>
-          <div style="font-size:.78rem;color:#bbf7d0;margin-bottom:.2rem;">
-            👤 ${S.user.name} · ${ROLES[S.user.role] || S.user.role}
-          </div>
-          <h1 style="font-size:1.25rem;font-weight:800;margin:0;">Painel ADM</h1>
+  <div class="admin-shell">
+    <div class="admin-sidebar-overlay ${S.sidebarOpen ? 'open' : ''}" onclick="W.toggleSidebar(false)"></div>
+    <nav class="admin-sidebar ${S.sidebarOpen ? 'open' : ''}">
+      <div style="padding:1.25rem 1rem 1rem;">
+        <div style="border-radius:.5rem;overflow:hidden;display:inline-block;margin-bottom:.625rem;line-height:0;">
+          <img src="/assets/logo-integros-selo.png" alt="ÍNTEGROS" style="height:2.1rem;width:auto;object-fit:contain;display:block;">
         </div>
-        <div style="display:flex;gap:.5rem;align-items:center;">
-          <button onclick="W.openChangePwd()"
-            style="background:rgba(0,0,0,.15);border:none;color:#bbf7d0;
-            padding:.4rem .75rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔑</button>
-          <button onclick="W.logout()"
-            style="background:rgba(0,0,0,.2);border:none;color:#fff;
-            padding:.5rem 1rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">Sair</button>
+        <div style="font-size:.78rem;color:#bbf7d0;margin-bottom:.2rem;">
+          👤 ${S.user.name} · ${ROLES[S.user.role] || S.user.role}
+        </div>
+        <h1 style="font-size:1.15rem;font-weight:800;margin:0;">Painel ADM</h1>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:.2rem;padding:.25rem .625rem;">
+        ${tabs.map(t => `
+        <button class="sidebar-link ${S.adminTab === t.id ? 'active' : ''}" onclick="W.setTab('${t.id}')">
+          <span>${t.label}</span>
+          ${t.count ? `<span class="count">${t.count}</span>` : ''}
+        </button>`).join('')}
+        ${isAdmin() ? `<a class="sidebar-link" href="/pages/inspecao-uniforme.html" style="text-decoration:none;"><span>👔 Inspeção de Uniforme</span></a>` : ''}
+      </div>
+      <div style="padding:.75rem;display:flex;flex-direction:column;gap:.5rem;border-top:1px solid rgba(255,255,255,.12);">
+        <button onclick="W.openChangePwd()"
+          style="background:rgba(0,0,0,.15);border:none;color:#bbf7d0;text-align:left;
+          padding:.625rem .875rem;border-radius:.625rem;font-size:.85rem;cursor:pointer;">🔑 Trocar senha</button>
+        <button onclick="W.logout()"
+          style="background:rgba(0,0,0,.2);border:none;color:#fff;text-align:left;
+          padding:.625rem .875rem;border-radius:.625rem;font-size:.85rem;cursor:pointer;">🚪 Sair</button>
+        <div style="display:flex;align-items:center;gap:.4rem;padding:.375rem .25rem 0;opacity:.6;">
+          <img src="/assets/logo-apv.png" alt="APV" style="height:1.1rem;width:auto;object-fit:contain;">
+          <span style="font-size:.65rem;color:#bbf7d0;">Associação Paulista do Vale</span>
         </div>
       </div>
-    </div>
+    </nav>
 
-    <div style="background:#fff;border-bottom:1px solid #f1f5f9;display:flex;overflow-x:auto;scrollbar-width:none;">
-      ${tabs.map(t => `
-      <button class="tab-btn ${S.adminTab === t.id ? 'active' : ''}" onclick="W.setTab('${t.id}')">
-        ${t.label}
-        ${t.count ? `<span style="background:#ef4444;color:#fff;font-size:.65rem;font-weight:700;padding:.1rem .4rem;border-radius:999px;margin-left:.25rem;">${t.count}</span>` : ''}
-      </button>`).join('')}
-    </div>
+    <div class="admin-main" style="background:#f0f4f8;min-height:100dvh;">
+      <div style="background:#fff;border-bottom:1px solid #f1f5f9;padding:.75rem 1rem;display:flex;align-items:center;gap:.75rem;">
+        <button class="admin-hamburger" onclick="W.toggleSidebar(true)">☰</button>
+        <span style="font-weight:800;color:#1e293b;">${tabs.find(t => t.id === S.adminTab)?.label || 'Painel ADM'}</span>
+      </div>
 
-    <div style="padding:1rem;padding-bottom:5rem;">
-      ${S.adminTab === 'queue'        ? tQueue()    : ''}
-      ${S.adminTab === 'requirements' && isAdmin()  ? tReqs()    : ''}
-      ${S.adminTab === 'history'      ? tHistory()  : ''}
-      ${S.adminTab === 'dashboard'    && isAdmin()  ? tDashboard(): ''}
-      ${S.adminTab === 'ranking'      && isAdmin()  ? tRanking() : ''}
-      ${S.adminTab === 'users'        && isSuperAdmin() ? tUsers(): ''}
+      <div style="padding:1rem;padding-bottom:5rem;">
+        ${S.adminTab === 'queue'        ? tQueue()    : ''}
+        ${S.adminTab === 'requirements' && isAdmin()  ? tReqs()    : ''}
+        ${S.adminTab === 'history'      ? tHistory()  : ''}
+        ${S.adminTab === 'dashboard'    && isAdmin()  ? tDashboard(): ''}
+        ${S.adminTab === 'ranking'      && isAdmin()       ? tRanking()  : ''}
+        ${S.adminTab === 'participants' && isAdmin()       ? tParticipants() : ''}
+        ${S.adminTab === 'units'        && isAdmin()       ? tUnits()    : ''}
+        ${S.adminTab === 'discipline'   && isAdmin()       ? tDiscipline() : ''}
+        ${S.adminTab === 'regions'      && isSuperAdmin()  ? tRegions()  : ''}
+        ${S.adminTab === 'users'        && isSuperAdmin()  ? tUsers()    : ''}
+      </div>
     </div>
   </div>`;
 }
 
 // ── TAB: FILA ─────────────────────────────────────────────────
+// Detalhe da Inspeção de Uniforme (erros por categoria + observações) para a revisão do admin
+function uniformDetails(sub) {
+  const ui = sub.uniformInspection;
+  if (!ui) return '';
+  const req = S.requirements.find(r => r.id === sub.requirementId);
+  const t = computeUniformPoints(ui.erros, req);
+  const rows = UNIFORM_CATEGORIES.map(c => {
+    const n = Math.max(0, Math.floor(Number(ui.erros?.[c.key])) || 0);
+    const o = ui.observacoes?.[c.key];
+    return `<tr style="border-top:1px solid #e9d5ff;"><td style="padding:.25rem .4rem;">${c.label}${c.optional ? ' <span style="color:#94a3b8;">(opcional)</span>' : ''}</td>
+      <td style="padding:.25rem .4rem;text-align:center;font-weight:800;color:${n && !c.optional ? '#b91c1c' : '#334155'};">${n}</td>
+      <td style="padding:.25rem .4rem;color:#64748b;">${o ? escHtml(o) : ''}</td></tr>`;
+  }).join('');
+  return `<div style="background:#faf5ff;border-radius:.625rem;padding:.625rem .75rem;margin-top:.5rem;">
+    <div style="font-size:.75rem;font-weight:700;color:#6b21a8;margin-bottom:.25rem;">👔 Inspeção de uniforme · ${t.totalErros} erro(s) · −${t.descontados} pts → <strong>${sub.requirementPoints ?? t.pontos} pts</strong></div>
+    <div style="font-size:.7rem;color:#7c3aed;margin-bottom:.3rem;">${escHtml(ui.avaliadorNome || sub.submittedByName || '')}${ui.avaliadoEm ? ' · ' + new Date(ui.avaliadoEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : ''}${sub.unitId ? ' · ' + escHtml(S.units.find(u => u.id === sub.unitId)?.name || '') : ''}</div>
+    <table style="width:100%;font-size:.76rem;border-collapse:collapse;"><thead><tr style="color:#6b21a8;text-align:left;"><th style="padding:.2rem .4rem;">Categoria</th><th style="padding:.2rem .4rem;">Erros</th><th style="padding:.2rem .4rem;">Observação</th></tr></thead><tbody>${rows}</tbody></table>
+  </div>`;
+}
+const escHtml = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function exportUniformCsv() {
+  const csv = buildUniformCsv({
+    submissions: S.submissions, units: S.units, regions: S.regions, requirements: S.requirements,
+    fmtDateTime: ms => new Date(ms).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+  });
+  if (csv.split('\r\n').length < 2) { toast('Nenhuma inspeção de uniforme registrada ainda', 'error'); return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `inspecoes-uniforme-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
 function tQueue() {
   const pending = [...S.submissions]
     .filter(s => s.status === 'pending')
@@ -183,6 +290,7 @@ function tQueue() {
               </div>
               ${sub.notes ? `<div style="background:#f8fafc;border-radius:.625rem;padding:.5rem .75rem;font-size:.82rem;color:#475569;margin-top:.5rem;">"${sub.notes}"</div>` : ''}
               ${subItemDetails(sub)}
+              ${uniformDetails(sub)}
             </div>
             <span style="background:#f1f5f9;color:#475569;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;white-space:nowrap;flex-shrink:0;">${sub.requirementCategory}</span>
           </div>
@@ -204,24 +312,25 @@ function tReqs() {
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
     <span style="font-weight:800;color:#1e293b;">Requisitos (${S.requirements.length})</span>
     <button onclick="W.openReqForm(null)"
-      style="background:#166534;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Novo</button>
+      style="background:#0D2B6E;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Novo</button>
   </div>
   ${S.requirements.length === 0
     ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">📝</div><p style="font-weight:600;">Nenhum requisito cadastrado</p></div>`
     : `<div style="display:flex;flex-direction:column;gap:.625rem;">
-      ${S.requirements.map(req => `
+      ${S.requirements.map(req => { const type = reqFilledBy(req); return `
       <div class="card" style="padding:1rem;overflow:visible;">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;">
           <div style="flex:1;">
             <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
               <span style="background:#f1f5f9;color:#475569;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.category}</span>
+              ${req.areaAtuacao ? `<span style="background:#eef2ff;color:#4338ca;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">📌 ${req.areaAtuacao}</span>` : ''}
               <span style="background:#dbeafe;color:#1d4ed8;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.points} pts</span>
-              ${req.phase ? `<span style="background:#f0fdf4;color:#166534;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.phase}</span>` : ''}
+              ${req.phase ? `<span style="background:#f0fdf4;color:#0D2B6E;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${req.phase}</span>` : ''}
               ${req.competitionCategory && req.competitionCategory !== 'Ambos'
                 ? `<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${req.competitionCategory}</span>` : ''}
-              ${req.evaluatedBy && req.evaluatedBy !== 'both'
-                ? `<span class="badge-fiscal">${req.evaluatedBy === 'fiscal' ? '⚖️ Só Fiscal' : '📍 Só Região'}</span>` : ''}
+              <span class="badge-fiscal">${type === 'conselheiro' ? '🏕️' : type === 'fiscal' ? '⚖️' : '📍'} ${FILLED_BY[type]}</span>
               ${req.subItems?.length ? `<span style="background:#f5f3ff;color:#6d28d9;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">📊 ${req.subItems.length} sub</span>` : ''}
+              ${req.qrVariants?.length ? `<span style="background:#f0fdf4;color:#166534;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">🔲 ${req.qrVariants.length} QR</span>` : ''}
               ${req.active === false ? `<span style="background:#fee2e2;color:#dc2626;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">Inativo</span>` : ''}
             </div>
             <div style="font-weight:700;color:#1e293b;font-size:.9rem;">${req.name}</div>
@@ -234,7 +343,7 @@ function tReqs() {
               style="background:#fef2f2;border:none;color:#ef4444;padding:.5rem;border-radius:.625rem;cursor:pointer;">🗑️</button>
           </div>
         </div>
-      </div>`).join('')}
+      </div>`; }).join('')}
     </div>`}`;
 }
 
@@ -252,7 +361,9 @@ function tHistory() {
       <span style="font-weight:800;color:#1e293b;">Histórico (${filtered.length})</span>
       <div style="display:flex;gap:.375rem;">
         <button onclick="W.exportExcel()"
-          style="background:#166534;color:#fff;border:none;padding:.375rem .875rem;border-radius:.625rem;font-size:.78rem;font-weight:700;cursor:pointer;">📊 Excel</button>
+          style="background:#0D2B6E;color:#fff;border:none;padding:.375rem .875rem;border-radius:.625rem;font-size:.78rem;font-weight:700;cursor:pointer;">📊 Excel</button>
+        <button onclick="W.exportUniformCsv()"
+          style="background:#6b21a8;color:#fff;border:none;padding:.375rem .875rem;border-radius:.625rem;font-size:.78rem;font-weight:700;cursor:pointer;">👔 CSV Uniforme</button>
         <button onclick="window.print()"
           style="background:#1e3a8a;color:#fff;border:none;padding:.375rem .875rem;border-radius:.625rem;font-size:.78rem;font-weight:700;cursor:pointer;">🖨️ Imprimir</button>
       </div>
@@ -261,7 +372,7 @@ function tHistory() {
       ${statuses.map(st => `
       <button onclick="W.filterStatus('${st}')"
         style="padding:.3rem .75rem;border-radius:999px;border:none;font-size:.75rem;font-weight:600;cursor:pointer;
-        background:${S.filterStatus === st ? '#166534' : '#f1f5f9'};
+        background:${S.filterStatus === st ? '#0D2B6E' : '#f1f5f9'};
         color:${S.filterStatus === st ? '#fff' : '#64748b'};">
         ${labels[st]}
       </button>`).join('')}
@@ -294,13 +405,23 @@ function tHistory() {
             ${sub.rejectionReason ? `<div style="font-size:.78rem;color:#dc2626;margin-bottom:.5rem;background:#fff1f1;padding:.375rem .625rem;border-radius:.5rem;">Motivo: ${sub.rejectionReason}</div>` : ''}
             ${sub.notes ? `<div style="background:#f8fafc;border-radius:.5rem;padding:.4rem .625rem;font-size:.78rem;color:#475569;margin-bottom:.5rem;">"${sub.notes}"</div>` : ''}
             ${subItemDetails(sub)}
-            ${sub.status !== 'pending'
-              ? `<button onclick="W.reopen('${sub.id}')"
-                  style="width:100%;margin-top:.625rem;padding:.625rem;background:#f8fafc;border:1.5px solid #e2e8f0;
-                  border-radius:.75rem;color:#475569;font-size:.82rem;font-weight:600;cursor:pointer;">
-                  🔄 Reverter para revisão
-                </button>`
-              : ''}
+            ${uniformDetails(sub)}
+            <div style="display:flex;gap:.5rem;margin-top:.625rem;">
+              ${sub.status !== 'pending'
+                ? `<button onclick="W.reopen('${sub.id}')"
+                    style="flex:1;padding:.625rem;background:#f8fafc;border:1.5px solid #e2e8f0;
+                    border-radius:.75rem;color:#475569;font-size:.82rem;font-weight:600;cursor:pointer;">
+                    🔄 Reverter
+                  </button>`
+                : ''}
+              ${isSuperAdmin()
+                ? `<button onclick="W.deleteSubmission('${sub.id}')"
+                    style="padding:.625rem .875rem;background:#fef2f2;border:1.5px solid #fca5a5;
+                    border-radius:.75rem;color:#dc2626;font-size:.82rem;font-weight:600;cursor:pointer;">
+                    🗑️ Excluir
+                  </button>`
+                : ''}
+            </div>
           </div>
         </div>`).join('')}
       </div>`}
@@ -309,12 +430,26 @@ function tHistory() {
 
 // ── TAB: DASHBOARD ────────────────────────────────────────────
 function tDashboard() {
-  const scores   = computeScores(S.submissions, S.requirements, S.users);
+  const scores   = computeUnitScores(S.submissions, S.units, S.disciplinaryActions);
   const total    = S.submissions.length;
   const approved = S.submissions.filter(s => s.status === 'approved').length;
   const pending  = S.submissions.filter(s => s.status === 'pending').length;
   const rejected = S.submissions.filter(s => s.status === 'rejected').length;
-  const totalPts = scores.reduce((a, s) => a + s.total, 0);
+  // Soma de pontos únicos aprovados (não é a soma de scores[].total — isso duplicaria
+  // pontos de requisitos Regionais, distribuídos pra todas as unidades da região)
+  const totalPts = (() => {
+    const counted = new Set();
+    let sum = 0;
+    [...S.submissions].filter(s => s.status === 'approved')
+      .sort((a, b) => (b.submittedAt?.seconds || 0) - (a.submittedAt?.seconds || 0))
+      .forEach(s => {
+        const key = s.unitId ? `u:${s.unitId}:${s.requirementId}` : `r:${s.regionId}:${s.requirementId}`;
+        if (counted.has(key)) return;
+        counted.add(key);
+        sum += s.requirementPoints || 0;
+      });
+    return sum;
+  })();
   const maxPts   = scores[0]?.total || 1;
   const ptsByCat = {};
   S.submissions.filter(s => s.status === 'approved').forEach(s => {
@@ -351,7 +486,7 @@ function tDashboard() {
     </div>` : ''}
 
     <div class="card" style="padding:1rem;overflow:visible;">
-      <div style="font-weight:700;color:#1e293b;margin-bottom:.875rem;font-size:.9rem;">🏆 Top 10 Regiões</div>
+      <div style="font-weight:700;color:#1e293b;margin-bottom:.875rem;font-size:.9rem;">🏆 Top 10 Unidades</div>
       <div style="display:flex;flex-direction:column;gap:.5rem;">
         ${scores.slice(0, 10).map((s, i) => `
         <div>
@@ -360,7 +495,7 @@ function tDashboard() {
             <span style="font-weight:700;color:#1d4ed8;">${s.total} pts</span>
           </div>
           <div style="background:#e2e8f0;border-radius:999px;height:.4rem;">
-            <div style="background:${i === 0 ? '#ca8a04' : i === 1 ? '#9ca3af' : i === 2 ? '#92400e' : '#3b82f6'};
+            <div style="background:${i === 0 ? '#D4A017' : i === 1 ? '#9ca3af' : i === 2 ? '#92400e' : '#3b82f6'};
               border-radius:999px;height:.4rem;width:${Math.round(s.total / maxPts * 100)}%;"></div>
           </div>
         </div>`).join('')}
@@ -375,7 +510,7 @@ function tDashboard() {
         <div>
           <div style="display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:.2rem;">
             <span style="color:#374151;">${cat}</span>
-            <span style="font-weight:700;color:#166534;">${pts} pts</span>
+            <span style="font-weight:700;color:#0D2B6E;">${pts} pts</span>
           </div>
           <div style="background:#e2e8f0;border-radius:999px;height:.4rem;">
             <div style="background:#16a34a;border-radius:999px;height:.4rem;width:${Math.round(pts / catMax * 100)}%;"></div>
@@ -387,45 +522,45 @@ function tDashboard() {
 }
 
 // ── TAB: RANKING ──────────────────────────────────────────────
+// Ranking único por unidade — sem separação DBV/AVT, já que as unidades são mistas.
 function tRanking() {
-  const cat    = S.rankingCat;
-  const scores = computeScores(S.submissions, S.requirements, S.users, cat);
+  // fonte nuvem = cálculo ao vivo (listeners do Firestore); fonte local / cópia guardada = o que o servidor devolveu
+  const live = !S.rankInfo || S.rankInfo.source === 'cloud';
+  const scores = live ? computeUnitScores(S.submissions, S.units, S.disciplinaryActions) : S.rankInfo.rows;
+  const stamp  = rankingStampHtml(live ? { updatedAt: Date.now(), source: 'cloud' } : S.rankInfo);
   const max    = scores[0]?.total || 1;
   const top3   = scores.filter(s => s.total > 0).slice(0, 3);
 
   return `
   <div>
-    <div style="display:flex;justify-content:center;margin-bottom:1rem;">
-      <div style="display:inline-flex;gap:.375rem;background:#f1f5f9;border-radius:999px;padding:.25rem;">
-        ${['Todos', 'DBV', 'AVT'].map(c => `
-        <button onclick="W.setRankingCat('${c}')"
-          style="padding:.375rem .875rem;border-radius:999px;border:none;font-size:.8rem;font-weight:700;cursor:pointer;
-          background:${cat === c ? '#166534' : 'transparent'};
-          color:${cat === c ? '#fff' : '#64748b'};">${c}</button>`).join('')}
-      </div>
-    </div>
-
+    ${stamp}
     ${top3.length >= 3 ? `
     <div style="display:flex;align-items:flex-end;gap:.75rem;margin-bottom:1.25rem;">
       <div style="flex:1;text-align:center;">
         <div style="font-size:1.75rem;margin-bottom:.375rem;">🥈</div>
         <div style="background:#e2e8f0;border-radius:.875rem .875rem 0 0;padding:.75rem .5rem 1rem;min-height:5rem;display:flex;flex-direction:column;justify-content:flex-end;">
           <div style="font-weight:800;color:#1e293b;font-size:.8rem;">${top3[1]?.name}</div>
+          <div style="color:#94a3b8;font-size:.65rem;">${rname(top3[1]?.regionId)}</div>
           <div style="color:#64748b;font-size:.75rem;font-weight:600;">${top3[1]?.total} pts</div>
+          <div style="font-size:.7rem;">${'⭐'.repeat(computeStars(top3[1]?.total, max))}</div>
         </div>
       </div>
       <div style="flex:1;text-align:center;">
         <div style="font-size:2.25rem;margin-bottom:.375rem;">🥇</div>
         <div style="background:#fef3c7;border-radius:.875rem .875rem 0 0;padding:.75rem .5rem 1rem;min-height:7rem;display:flex;flex-direction:column;justify-content:flex-end;">
           <div style="font-weight:800;color:#1e293b;font-size:.85rem;">${top3[0]?.name}</div>
-          <div style="color:#ca8a04;font-size:.8rem;font-weight:800;">${top3[0]?.total} pts</div>
+          <div style="color:#94a3b8;font-size:.65rem;">${rname(top3[0]?.regionId)}</div>
+          <div style="color:#D4A017;font-size:.8rem;font-weight:800;">${top3[0]?.total} pts</div>
+          <div style="font-size:.75rem;">${'⭐'.repeat(computeStars(top3[0]?.total, max))}</div>
         </div>
       </div>
       <div style="flex:1;text-align:center;">
         <div style="font-size:1.75rem;margin-bottom:.375rem;">🥉</div>
         <div style="background:#fee2e2;border-radius:.875rem .875rem 0 0;padding:.75rem .5rem 1rem;min-height:3.5rem;display:flex;flex-direction:column;justify-content:flex-end;">
           <div style="font-weight:800;color:#1e293b;font-size:.8rem;">${top3[2]?.name}</div>
+          <div style="color:#94a3b8;font-size:.65rem;">${rname(top3[2]?.regionId)}</div>
           <div style="color:#dc2626;font-size:.75rem;font-weight:600;">${top3[2]?.total} pts</div>
+          <div style="font-size:.7rem;">${'⭐'.repeat(computeStars(top3[2]?.total, max))}</div>
         </div>
       </div>
     </div>` : ''}
@@ -437,18 +572,24 @@ function tRanking() {
         <div style="display:flex;align-items:center;gap:.875rem;padding:.875rem;border-radius:.875rem;
           background:${i < 3 && s.total > 0 ? '#f0fdf4' : '#f8fafc'};">
           <div style="width:2rem;text-align:center;font-weight:800;font-size:.9rem;flex-shrink:0;
-            color:${i === 0 && s.total > 0 ? '#ca8a04' : i === 1 && s.total > 0 ? '#6b7280' : i === 2 && s.total > 0 ? '#92400e' : '#94a3b8'};">
+            color:${i === 0 && s.total > 0 ? '#D4A017' : i === 1 && s.total > 0 ? '#6b7280' : i === 2 && s.total > 0 ? '#92400e' : '#94a3b8'};">
             ${i === 0 && s.total > 0 ? '🥇' : i === 1 && s.total > 0 ? '🥈' : i === 2 && s.total > 0 ? '🥉' : `${i + 1}º`}
           </div>
           <div style="flex:1;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem;">
-              <span style="font-weight:700;color:#1e293b;font-size:.9rem;">${s.name}</span>
-              <span style="font-weight:800;color:${s.total > 0 ? '#166534' : '#94a3b8'};font-size:.9rem;">${s.total} pts</span>
+              <span>
+                <span style="font-weight:700;color:#1e293b;font-size:.9rem;">${s.name}</span>
+                <span style="color:#94a3b8;font-size:.72rem;"> · ${rname(s.regionId)}</span>
+              </span>
+              <span style="font-weight:800;color:${s.total > 0 ? '#0D2B6E' : '#94a3b8'};font-size:.9rem;">${s.total} pts</span>
             </div>
             <div style="background:#e2e8f0;border-radius:999px;height:.4rem;">
               <div style="background:#16a34a;border-radius:999px;height:.4rem;width:${Math.round((s.total / max) * 100)}%;"></div>
             </div>
-            ${s.count > 0 ? `<div style="font-size:.7rem;color:#94a3b8;margin-top:.2rem;">${s.count} aprovação${s.count !== 1 ? 'ões' : ''}</div>` : ''}
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:.2rem;">
+              ${s.count > 0 ? `<div style="font-size:.7rem;color:#94a3b8;">${s.count} aprovação${s.count !== 1 ? 'ões' : ''}</div>` : '<div></div>'}
+              ${s.total > 0 ? `<div style="font-size:.7rem;">${'⭐'.repeat(computeStars(s.total, max))}</div>` : ''}
+            </div>
           </div>
         </div>`).join('')}
     </div>
@@ -456,15 +597,69 @@ function tRanking() {
   </div>`;
 }
 
-// ── TAB: USUÁRIOS ─────────────────────────────────────────────
-function tUsers() {
-  const sorted = [...S.users].sort((a, b) => a.name.localeCompare(b.name));
+// ── TAB: REGIÕES ──────────────────────────────────────────────
+function tRegions() {
+  const sorted = [...S.regions].sort((a, b) => a.name.localeCompare(b.name));
+  const linkedUserOf = regId => S.users.find(u => u.regionId === regId && u.role === 'region');
   return `
   <div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
-      <span style="font-weight:800;color:#1e293b;">Usuários (${S.users.length})</span>
+      <span style="font-weight:800;color:#1e293b;">Regiões (${S.regions.length})</span>
+      <div style="display:flex;gap:.5rem;">
+        <button onclick="W.openRegionForm(null)"
+          style="background:#0D2B6E;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Nova</button>
+      </div>
+    </div>
+    ${sorted.length === 0
+      ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;">
+          <div style="font-size:3rem;">🗺️</div>
+          <p style="font-weight:600;">Nenhuma região cadastrada</p>
+          <p style="font-size:.85rem;">Clique em "+ Nova" para cadastrar as regiões</p>
+        </div>`
+      : `<div style="display:flex;flex-direction:column;gap:.625rem;">
+        ${sorted.map(reg => `
+        <div class="card" style="padding:1rem;overflow:visible;border:1px solid ${reg.active === false ? '#fee2e2' : '#e2e8f0'};">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;">
+            <div style="flex:1;">
+              <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
+                <span style="background:${reg.competitionCategory === 'AVT' ? '#d1fae5' : '#dbeafe'};
+                  color:${reg.competitionCategory === 'AVT' ? '#065f46' : '#1d4ed8'};
+                  font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">
+                  ${reg.competitionCategory || 'DBV'}
+                </span>
+                ${reg.active === false ? `<span style="background:#fee2e2;color:#dc2626;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">Inativa</span>` : ''}
+              </div>
+              <div style="font-weight:700;color:#1e293b;">${reg.name}</div>
+              ${reg.responsible
+                ? `<div style="font-size:.78rem;color:#64748b;margin-top:.15rem;">
+                    👤 ${reg.responsible}${reg.responsiblePhone ? ` · ${reg.responsiblePhone}` : ''}
+                  </div>`
+                : `<div style="font-size:.75rem;color:#94a3b8;margin-top:.15rem;">Sem responsável cadastrado</div>`}
+              ${(() => { const lu = linkedUserOf(reg.id); return lu
+                ? `<div style="font-size:.72rem;color:#94a3b8;margin-top:.2rem;">🔑 Login: <strong>${lu.username}</strong></div>`
+                : `<div style="font-size:.72rem;color:#dc2626;margin-top:.2rem;">⚠️ Sem usuário vinculado</div>`; })()}
+            </div>
+            <div style="display:flex;gap:.375rem;flex-shrink:0;">
+              <button onclick="W.openRegionForm('${reg.id}')"
+                style="background:#eff6ff;border:none;color:#1d4ed8;padding:.5rem;border-radius:.625rem;cursor:pointer;">✏️</button>
+              <button onclick="W.delRegion('${reg.id}','${reg.name}')"
+                style="background:#fef2f2;border:none;color:#ef4444;padding:.5rem;border-radius:.625rem;cursor:pointer;">🗑️</button>
+            </div>
+          </div>
+        </div>`).join('')}
+      </div>`}
+  </div>`;
+}
+
+// ── TAB: USUÁRIOS ─────────────────────────────────────────────
+function tUsers() {
+  const sorted = [...S.users].filter(u => u.role !== 'region').sort((a, b) => a.name.localeCompare(b.name));
+  return `
+  <div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
+      <span style="font-weight:800;color:#1e293b;">Usuários (${sorted.length})</span>
       <button onclick="W.openUserForm(null)"
-        style="background:#166534;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Novo</button>
+        style="background:#0D2B6E;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Novo</button>
     </div>
     ${sorted.length === 0
       ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">👥</div><p>Nenhum usuário</p></div>`
@@ -475,15 +670,17 @@ function tUsers() {
             <div style="flex:1;">
               <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
                 <span style="background:${u.role === 'superadmin' ? '#fef3c7' : u.role === 'admin' ? '#dbeafe' : u.role === 'judge' ? '#ede9fe' : '#f0fdf4'};
-                  color:${u.role === 'superadmin' ? '#92400e' : u.role === 'admin' ? '#1d4ed8' : u.role === 'judge' ? '#6d28d9' : '#166534'};
+                  color:${u.role === 'superadmin' ? '#92400e' : u.role === 'admin' ? '#1d4ed8' : u.role === 'judge' ? '#6d28d9' : '#0D2B6E'};
                   font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${ROLES[u.role] || u.role}</span>
                 ${u.active === false ? `<span style="background:#fee2e2;color:#dc2626;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">Inativo</span>` : ''}
-                ${u.regionId ? `<span style="background:#f1f5f9;color:#475569;font-size:.7rem;padding:.2rem .6rem;border-radius:999px;">${rname(u.regionId)}</span>` : ''}
                 ${u.competitionCategory ? `<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${u.competitionCategory}</span>` : ''}
                 ${u.judgeCategory ? `<span style="background:#f5f3ff;color:#6d28d9;font-size:.7rem;padding:.2rem .6rem;border-radius:999px;">${u.judgeCategory}</span>` : ''}
               </div>
               <div style="font-weight:700;color:#1e293b;">${u.name}</div>
-              <div style="font-size:.78rem;color:#64748b;">@${u.username}${u.phone ? ` · ${u.phone}` : ''}</div>
+              <div style="font-size:.78rem;color:#64748b;">${u.username}${u.phone ? ` · ${u.phone}` : ''}</div>
+              ${u.role === 'counselor' && u.unitId
+                ? `<div style="font-size:.72rem;color:#94a3b8;margin-top:.1rem;">🏕️ ${S.units.find(x => x.id === u.unitId)?.name || u.unitId}</div>`
+                : ''}
             </div>
             <div style="display:flex;gap:.375rem;flex-shrink:0;">
               <button onclick="W.openUserForm('${u.id}')"
@@ -493,7 +690,179 @@ function tUsers() {
                 color:${u.active === false ? '#16a34a' : '#ef4444'};padding:.5rem;border-radius:.625rem;cursor:pointer;">
                 ${u.active === false ? '✅' : '🚫'}
               </button>
+              ${isSuperAdmin() ? `<button onclick="W.deleteUser('${u.id}','${u.name}')"
+                style="background:#fef2f2;border:none;color:#dc2626;padding:.5rem;border-radius:.625rem;cursor:pointer;">🗑️</button>` : ''}
             </div>
+          </div>
+        </div>`).join('')}
+      </div>`}
+  </div>`;
+}
+
+// ── TAB: PARTICIPANTES ────────────────────────────────────────
+function tParticipants() {
+  const regFilter = S.participantFilterRegion;
+  const catFilter = S.participantFilterCat;
+  const filtered = S.participants.filter(p =>
+    (regFilter === 'Todas' || p.regionId === regFilter) &&
+    (catFilter === 'Todos' || p.competitionCategory === catFilter)
+  ).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const sortedRegions = [...S.regions].sort((a, b) => a.name.localeCompare(b.name));
+
+  return `
+  <div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;flex-wrap:wrap;gap:.5rem;">
+      <span style="font-weight:800;color:#1e293b;">Participantes (${filtered.length})</span>
+      <div style="display:flex;gap:.5rem;">
+        <button onclick="W.openParticipantImport()"
+          style="background:#eff6ff;color:#1d4ed8;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">📥 Importar</button>
+        <button onclick="W.openParticipantForm(null)"
+          style="background:#0D2B6E;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Novo</button>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:.5rem;margin-bottom:.875rem;flex-wrap:wrap;">
+      <select onchange="W.setParticipantFilterRegion(this.value)"
+        style="border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.4rem .625rem;font-size:.82rem;background:#fff;">
+        <option value="Todas" ${regFilter === 'Todas' ? 'selected' : ''}>Todas as regiões</option>
+        ${sortedRegions.map(r => `<option value="${r.id}" ${regFilter === r.id ? 'selected' : ''}>${r.name}</option>`).join('')}
+      </select>
+      <select onchange="W.setParticipantFilterCat(this.value)"
+        style="border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.4rem .625rem;font-size:.82rem;background:#fff;">
+        ${['Todos', 'DBV', 'AVT'].map(c => `<option value="${c}" ${catFilter === c ? 'selected' : ''}>${c}</option>`).join('')}
+      </select>
+    </div>
+
+    ${filtered.length === 0
+      ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">👥</div><p style="font-weight:600;">Nenhum participante</p></div>`
+      : `<div style="display:flex;flex-direction:column;gap:.625rem;">
+        ${filtered.map(p => `
+        <div class="card" style="padding:1rem;overflow:visible;">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;">
+            <div style="flex:1;">
+              <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
+                <span style="background:${p.competitionCategory === 'AVT' ? '#d1fae5' : '#dbeafe'};
+                  color:${p.competitionCategory === 'AVT' ? '#065f46' : '#1d4ed8'};
+                  font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${p.competitionCategory || '—'}</span>
+                ${p.unitId ? `<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">Alocado em unidade</span>` : ''}
+              </div>
+              <div style="font-weight:700;color:#1e293b;">${p.name}</div>
+              <div style="font-size:.78rem;color:#64748b;">${p.club ? `${p.club} · ` : ''}${rname(p.regionId)}</div>
+            </div>
+            <div style="display:flex;gap:.375rem;flex-shrink:0;">
+              <button onclick="W.openParticipantForm('${p.id}')"
+                style="background:#eff6ff;border:none;color:#1d4ed8;padding:.5rem;border-radius:.625rem;cursor:pointer;">✏️</button>
+              ${isSuperAdmin() ? `<button onclick="W.deleteParticipant('${p.id}','${p.name}')"
+                style="background:#fef2f2;border:none;color:#dc2626;padding:.5rem;border-radius:.625rem;cursor:pointer;">🗑️</button>` : ''}
+            </div>
+          </div>
+        </div>`).join('')}
+      </div>`}
+  </div>`;
+}
+
+// ── TAB: UNIDADES ─────────────────────────────────────────────
+function tUnits() {
+  const regFilter = S.unitFilterRegion;
+  const filtered = S.units.filter(u => regFilter === 'Todas' || u.regionId === regFilter)
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const sortedRegions = [...S.regions].sort((a, b) => a.name.localeCompare(b.name));
+
+  return `
+  <div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;flex-wrap:wrap;gap:.5rem;">
+      <span style="font-weight:800;color:#1e293b;">Unidades (${filtered.length})</span>
+      <button onclick="W.openUnitForm(null)"
+        style="background:#0D2B6E;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Nova</button>
+    </div>
+
+    <div style="margin-bottom:.875rem;">
+      <select onchange="W.setUnitFilterRegion(this.value)"
+        style="border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.4rem .625rem;font-size:.82rem;background:#fff;">
+        <option value="Todas" ${regFilter === 'Todas' ? 'selected' : ''}>Todas as regiões</option>
+        ${sortedRegions.map(r => `<option value="${r.id}" ${regFilter === r.id ? 'selected' : ''}>${r.name}</option>`).join('')}
+      </select>
+    </div>
+
+    ${filtered.length === 0
+      ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">🏕️</div><p style="font-weight:600;">Nenhuma unidade cadastrada</p></div>`
+      : `<div style="display:flex;flex-direction:column;gap:.625rem;">
+        ${filtered.map(u => {
+          const members = S.participants.filter(p => p.unitId === u.id);
+          const guestCount = members.filter(p => p.regionId !== u.regionId).length;
+          const counselor = S.users.find(cu => cu.role === 'counselor' && cu.unitId === u.id);
+          return `
+          <div class="card" style="padding:1rem;overflow:visible;">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;">
+              <div style="flex:1;">
+                <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
+                  <span style="background:#f1f5f9;color:#475569;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${rname(u.regionId)}</span>
+                  <span style="background:#dbeafe;color:#1d4ed8;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">${members.length} membro${members.length !== 1 ? 's' : ''}</span>
+                  ${guestCount > 0 ? `<span style="background:#fef3c7;color:#92400e;font-size:.7rem;font-weight:600;padding:.2rem .6rem;border-radius:999px;">${guestCount} clube amigo</span>` : ''}
+                </div>
+                <div style="font-weight:700;color:#1e293b;">${u.name}</div>
+                ${u.warCry ? `<div style="font-size:.78rem;color:#64748b;margin-top:.15rem;">"${u.warCry}"</div>` : ''}
+              </div>
+              <div style="display:flex;gap:.375rem;flex-shrink:0;">
+                <button onclick="W.openUnitParticipants('${u.id}')"
+                  style="background:#f0fdf4;border:none;color:#166534;padding:.5rem;border-radius:.625rem;cursor:pointer;">👥</button>
+                <button onclick="W.openUnitForm('${u.id}')"
+                  style="background:#eff6ff;border:none;color:#1d4ed8;padding:.5rem;border-radius:.625rem;cursor:pointer;">✏️</button>
+                ${isSuperAdmin() ? `<button onclick="W.deleteUnit('${u.id}','${u.name}')"
+                  style="background:#fef2f2;border:none;color:#dc2626;padding:.5rem;border-radius:.625rem;cursor:pointer;">🗑️</button>` : ''}
+              </div>
+            </div>
+            <div style="margin-top:.75rem;padding-top:.625rem;border-top:1px solid #f1f5f9;display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;">
+              ${counselor
+                ? `<div style="font-size:.78rem;color:#64748b;">👤 Conselheiro: <strong>${counselor.name}</strong> (${counselor.username})</div>`
+                : `<div style="font-size:.78rem;color:#94a3b8;">Sem conselheiro vinculado</div>`}
+              ${!counselor ? `<button onclick="W.openCounselorForm('${u.id}')"
+                  style="background:#eff6ff;color:#1d4ed8;border:none;padding:.4rem .75rem;border-radius:.625rem;font-size:.78rem;font-weight:700;cursor:pointer;">+ Vincular Conselheiro</button>` : ''}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`}
+  </div>`;
+}
+
+// ── TAB: DISCIPLINA ───────────────────────────────────────────
+function tDiscipline() {
+  const sorted = [...S.disciplinaryActions].sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  const dupIds = new Set(dedupeDisciplinaryActions(S.disciplinaryActions).duplicates.map(d => d.id));   // lançada local + nuvem: não soma duas vezes
+  // mesma infração (alvo + motivo) na mesma origem em < 10 min: ambas contam — avisa para o admin conferir
+  const near = sorted.filter((d, i) => sorted.slice(i + 1).some(o => !dupIds.has(d.id) && !dupIds.has(o.id) && o.targetType === d.targetType && o.targetId === d.targetId &&
+    findRecentSameInfraction([o], { targetType: d.targetType, targetId: d.targetId, reason: d.reason }, (d.createdAt?.seconds || 0) * 1000, DISCIPLINE_DUP_WINDOW_MS)));
+  return `
+  <div>
+    ${near.length ? `<div style="background:#fffbeb;border:1.5px solid #f59e0b;color:#92400e;border-radius:.75rem;padding:.6rem .8rem;font-size:.82rem;margin-bottom:.75rem;">
+      ⚠️ <strong>Mesma infração registrada mais de uma vez em menos de 10 minutos</strong> (${[...new Set(near.map(d => d.targetName || d.targetId))].join(', ')}). Confira — as duas descontam 5 pts. Se foi engano, exclua uma.</div>` : ''}
+    ${dupIds.size ? `<div style="background:#eff6ff;border:1.5px solid #93c5fd;color:#1e40af;border-radius:.75rem;padding:.6rem .8rem;font-size:.82rem;margin-bottom:.75rem;">
+      ℹ️ ${dupIds.size} lançamento(s) igual(is) feito(s) no servidor local e na nuvem foram contados <strong>uma vez só</strong> (marcados abaixo).</div>` : ''}
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
+      <span style="font-weight:800;color:#1e293b;">Disciplina (${sorted.length})</span>
+      <button onclick="W.openDisciplineForm()"
+        style="background:#dc2626;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Registrar Infração</button>
+    </div>
+    ${sorted.length === 0
+      ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">⚠️</div><p style="font-weight:600;">Nenhuma infração registrada</p></div>`
+      : `<div style="display:flex;flex-direction:column;gap:.625rem;">
+        ${sorted.map(d => `
+        <div class="card" style="padding:1rem;overflow:visible;">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;">
+            <div style="flex:1;">
+              <div style="display:flex;gap:.375rem;flex-wrap:wrap;margin-bottom:.375rem;">
+                <span style="background:${d.targetType === 'region' ? '#dbeafe' : '#fef3c7'};color:${d.targetType === 'region' ? '#1d4ed8' : '#92400e'};font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">
+                  ${d.targetType === 'region' ? '🗺️ Região inteira' : '🏕️ Unidade'}
+                </span>
+                <span style="background:#fee2e2;color:#991b1b;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;${dupIds.has(d.id) ? 'text-decoration:line-through;opacity:.6;' : ''}">-${d.points || 5} pts</span>
+                ${dupIds.has(d.id) ? '<span style="background:#dbeafe;color:#1e40af;font-size:.7rem;font-weight:700;padding:.2rem .6rem;border-radius:999px;">duplicada (local × nuvem) — não soma</span>' : ''}
+              </div>
+              <div style="font-weight:700;color:#1e293b;">${d.targetName || d.targetId}</div>
+              <div style="font-size:.8rem;color:#64748b;margin-top:.15rem;">${d.reason}</div>
+              <div style="font-size:.72rem;color:#94a3b8;margin-top:.2rem;">${fmtDate(d.createdAt)} · ${d.createdByName || d.createdBy}</div>
+            </div>
+            ${isSuperAdmin() ? `<button onclick="W.deleteDiscipline('${d.id}')"
+              style="background:#fef2f2;border:none;color:#dc2626;padding:.5rem;border-radius:.625rem;cursor:pointer;flex-shrink:0;">🗑️</button>` : ''}
           </div>
         </div>`).join('')}
       </div>`}
@@ -507,6 +876,7 @@ function mReqForm() {
   const subItems = r.subItems || [];
   const subTotal = subItems.reduce((a, si) => a + Number(si.points || 0), 0);
   const hasSub   = subItems.length > 0;
+  const qrVariants = r.qrVariants || [];
   const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
   const sel = (id, opts, cur) =>
     `<select id="${id}" style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
@@ -533,13 +903,28 @@ function mReqForm() {
           <div>${lbl('Categoria *')}${sel('rq-cat', CATEGORIES, r.category || CATEGORIES[0])}</div>
           <div>${lbl('Fase *')}${sel('rq-phase', PHASES, r.phase || PHASES[0])}</div>
         </div>
+        <div>${lbl('Área de Atuação')}${sel('rq-areaatuacao', AREAS_ATUACAO, r.areaAtuacao || AREAS_ATUACAO[0])}</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;">
           <div>${lbl('Modalidade')}${sel('rq-compcat', COMP_CATS, r.competitionCategory || 'Ambos')}</div>
-          <div>${lbl('Avaliado por')}${sel('rq-evalby', [
-            { v: 'both', l: 'Fiscal e Região' },
-            { v: 'fiscal', l: 'Só Fiscal' },
-            { v: 'region', l: 'Só Região' }
-          ], r.evaluatedBy || 'both')}</div>
+          <div>${lbl('Tipo *')}${sel('rq-filledby', [
+            { v: 'regional', l: '📍 Regional' },
+            { v: 'conselheiro', l: '🏕️ Conselheiro' },
+            { v: 'fiscal', l: '⚖️ Só Fiscal' }
+          ], reqFilledBy(r))}</div>
+        </div>
+        <div style="border:1.5px solid #e9d5ff;border-radius:.875rem;padding:.875rem;background:#faf5ff;">
+          <label style="display:flex;align-items:center;gap:.6rem;font-size:.88rem;font-weight:700;color:#6b21a8;cursor:pointer;">
+            <input type="checkbox" id="rq-uniform" ${r.inspection === 'uniforme' ? 'checked' : ''} onchange="W.toggleUniform(this.checked)" style="width:1.1rem;height:1.1rem;">
+            👔 Inspeção de uniforme (avaliada pelo Fiscal na tela própria)
+          </label>
+          <div style="display:flex;align-items:center;gap:.6rem;margin-top:.6rem;">
+            <span style="font-size:.8rem;color:#475569;">Pontos descontados por erro:</span>
+            <input id="rq-uni-penalty" type="number" min="0" step="0.5" value="${r.uniformPenalty ?? 1}" style="width:5rem;border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.5rem;text-align:center;">
+          </div>
+          <div style="font-size:.72rem;color:#7c3aed;margin-top:.4rem;">Pontos da unidade = máx − erros × desconto (mínimo 0). O máximo é o campo “Pontuação” abaixo (sugestão: 10). “Opcionais” não descontam. Vale só para a unidade inspecionada.</div>
+        </div>
+        <div style="font-size:.72rem;color:#94a3b8;margin-top:-.5rem;">
+          Regional: aparece no portal da região, pontua para todas as unidades. Conselheiro: aparece no portal do conselheiro (sem distinção de modalidade), pontua só para a unidade. Fiscal: só o Fiscal de Prova avalia.
         </div>
 
         <div style="border:1.5px solid #e2e8f0;border-radius:.875rem;padding:1rem;background:#fafafa;">
@@ -573,6 +958,30 @@ function mReqForm() {
             style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;${hasSub ? 'background:#f8fafc;' : ''}">
         </div>
 
+        <div style="border:1.5px solid #e2e8f0;border-radius:.875rem;padding:1rem;background:#fafafa;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;">
+            <div>
+              <div style="font-size:.85rem;font-weight:700;color:#374151;">🔲 Variantes de QR Code (opcional)</div>
+              <div style="font-size:.72rem;color:#94a3b8;">Cada variante vira um QR Code próprio, com sua pontuação. Ex: Básica 50 pts, Avançada 100 pts.</div>
+            </div>
+            <button onclick="W.addQrVariant()"
+              style="background:#0D2B6E;color:#fff;border:none;padding:.375rem .75rem;border-radius:.625rem;font-size:.8rem;font-weight:700;cursor:pointer;flex-shrink:0;">+ Add</button>
+          </div>
+          <div id="qrvariants-list">
+            ${qrVariants.map((v, i) => `
+            <div class="qr-variant-row" data-id="${v.id || ''}" style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
+              <input class="qv-label" type="text" value="${v.label || ''}" placeholder="Nome da variante (ex: Básica)"
+                style="flex:1;border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.625rem;font-size:.85rem;outline:none;">
+              <input class="qv-points" type="number" value="${v.points || 0}" min="0" placeholder="pts"
+                style="width:70px;border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.625rem;font-size:.85rem;outline:none;text-align:center;">
+              <button onclick="W.removeQrVariant(${i})"
+                style="background:#fef2f2;border:none;color:#ef4444;padding:.5rem;border-radius:.5rem;cursor:pointer;flex-shrink:0;">🗑️</button>
+            </div>`).join('')}
+          </div>
+          ${qrVariants.length === 0 ? `<div style="font-size:.75rem;color:#94a3b8;text-align:center;">Sem variantes — este requisito não terá QR Code</div>` : ''}
+          <div style="font-size:.7rem;color:#94a3b8;margin-top:.375rem;">Os QR Codes são gerados e exibidos só na tela do Fiscal de Prova, depois de salvar.</div>
+        </div>
+
         ${isEdit ? `
         <div style="display:flex;align-items:center;gap:.75rem;">
           <input type="checkbox" id="rq-active" ${r.active !== false ? 'checked' : ''} style="width:1.1rem;height:1.1rem;">
@@ -580,7 +989,7 @@ function mReqForm() {
         </div>` : ''}
 
         <button onclick="W.saveReq()" ${S.loading ? 'disabled' : ''}
-          style="width:100%;background:#166534;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
           ${S.loading ? '⏳ Salvando...' : (isEdit ? '💾 Salvar' : '+ Criar Requisito')}
         </button>
       </div>
@@ -592,9 +1001,14 @@ function mReqForm() {
 
 // ── MODAL: USUÁRIO ────────────────────────────────────────────
 function mUserForm() {
-  const u      = S.editingUser;
-  const isEdit = !!u?.id;
-  const role   = S.formRole || u?.role || 'region';
+  const u           = S.editingUser;
+  const isEdit      = !!u?.id;
+  // 'region' e 'counselor' não são criáveis aqui: precisam de regionId/unitId,
+  // que só existem nos fluxos dedicados (aba Regiões / botão "Vincular Conselheiro" em Unidades)
+  const roleOptions = Object.entries(ROLES).filter(([k]) => k !== 'region' && k !== 'counselor');
+  const role        = S.formRole || u?.role || null;
+  const showRest    = isEdit || !!role;
+  const isCounselor = isEdit && u?.role === 'counselor';
   const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
 
   return `
@@ -602,53 +1016,33 @@ function mUserForm() {
     <div class="modal-content" style="max-width:420px;">
       <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">${isEdit ? 'Editar' : 'Novo'} Usuário</h2>
       <div style="display:flex;flex-direction:column;gap:.875rem;">
+        ${isCounselor
+          ? `<div>${lbl('Perfil')}<div style="background:#f8fafc;border-radius:.875rem;padding:.875rem;font-weight:700;color:#374151;">🏕️ Conselheiro</div></div>`
+          : `<div>${lbl('Perfil *')}
+          <select id="u-role" onchange="W.setFormRole(this.value)"
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
+            ${!isEdit ? `<option value="" disabled ${!role ? 'selected' : ''}>Selecione o perfil...</option>` : ''}
+            ${roleOptions.map(([k, v]) => `<option value="${k}" ${role === k ? 'selected' : ''}>${v}</option>`).join('')}
+          </select>
+        </div>`}
+        ${showRest ? `
         <div>${lbl('Nome completo *')}<input id="u-name" type="text" value="${u?.name || ''}" placeholder="João Silva"
           style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
         <div>${lbl('Telefone')}<input id="u-phone" type="tel" value="${u?.phone || ''}" placeholder="(11) 99999-9999"
           style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
-        ${!isEdit
-          ? `<div>${lbl('Usuário (login) *')}<input id="u-username" type="text" value="${u?.username || ''}" placeholder="joao.silva"
-              style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;text-transform:lowercase;"></div>`
-          : `<div style="background:#f8fafc;border-radius:.875rem;padding:.75rem;font-size:.85rem;color:#64748b;">Usuário: <strong>@${u?.username}</strong></div>`}
-        <div>${lbl('Perfil *')}
-          <select id="u-role" onchange="W.setFormRole(this.value)"
-            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
-            ${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${role === k ? 'selected' : ''}>${v}</option>`).join('')}
-          </select>
-        </div>
-        ${role === 'region' ? `
-          <div>${lbl('Região *')}<select id="u-region"
-            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
-            <option value="">Selecione...</option>
-            ${REGIONS.map(r => `<option value="${r.id}" ${u?.regionId === r.id ? 'selected' : ''}>${r.name}</option>`).join('')}
-          </select></div>
-          <div>${lbl('Modalidade *')}<select id="u-compcat"
-            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
-            <option value="">Selecione...</option>
-            <option value="DBV" ${u?.competitionCategory === 'DBV' ? 'selected' : ''}>DBV — Desbravadores</option>
-            <option value="AVT" ${u?.competitionCategory === 'AVT' ? 'selected' : ''}>AVT — Aventureiros</option>
-          </select></div>` : ''}
+        ${isEdit
+          ? `<div style="background:#f8fafc;border-radius:.875rem;padding:.75rem;font-size:.85rem;color:#64748b;">Usuário: <strong>${u?.username}</strong></div>`
+          : `<div style="background:#f8fafc;border-radius:.875rem;padding:.75rem 1rem;font-size:.8rem;color:#64748b;">🔑 Login e senha serão gerados automaticamente a partir do nome</div>`}
         ${role === 'judge' ? `
           <div>${lbl('Categoria *')}<select id="u-cat"
             style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
             <option value="">Todas as categorias</option>
             ${CATEGORIES.map(c => `<option value="${c}" ${u?.judgeCategory === c ? 'selected' : ''}>${c}</option>`).join('')}
           </select></div>` : ''}
-        ${!isEdit ? `
-          <div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:.875rem;padding:.875rem;">
-            <div style="font-size:.82rem;font-weight:700;color:#166534;margin-bottom:.375rem;">🔑 Senha gerada automaticamente</div>
-            <div style="display:flex;align-items:center;gap:.75rem;">
-              <input id="u-pwd" type="text" value="${S.generatedPwd}"
-                style="flex:1;border:1.5px solid #bbf7d0;border-radius:.625rem;padding:.625rem;font-size:1rem;font-weight:700;letter-spacing:.1rem;background:#fff;outline:none;">
-              <button onclick="W.regenPwd()"
-                style="background:#166534;border:none;color:#fff;padding:.625rem .875rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔄</button>
-            </div>
-            <div style="font-size:.75rem;color:#16a34a;margin-top:.375rem;">Anote e repasse ao usuário</div>
-          </div>` : ''}
         <button onclick="W.saveUser()" ${S.loading ? 'disabled' : ''}
-          style="width:100%;background:#166534;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
           ${S.loading ? '⏳ Salvando...' : (isEdit ? '💾 Salvar' : '+ Criar Usuário')}
-        </button>
+        </button>` : ''}
       </div>
       <button onclick="W.closeModal()"
         style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
@@ -668,6 +1062,334 @@ function mPhoto() {
       <div style="display:flex;gap:.75rem;margin-top:.75rem;justify-content:center;">
         <a href="${S.photoUrl}" target="_blank" style="color:#93c5fd;font-size:.85rem;text-decoration:none;">🔗 Tela cheia</a>
       </div>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: REGIÃO ─────────────────────────────────────────────
+function mRegionForm() {
+  const r      = S.editingRegion || {};
+  const isEdit = !!r.id;
+  const linkedUser = isEdit ? S.users.find(u => u.regionId === r.id && u.role === 'region') : null;
+  const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
+
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:420px;">
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">${isEdit ? 'Editar' : 'Nova'} Região</h2>
+      <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>${lbl('Nome *')}<input id="reg-name" type="text" value="${r.name || ''}" placeholder="Ex: 1ª Região"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Responsável')}<input id="reg-responsible" type="text" value="${r.responsible || ''}" placeholder="Nome do responsável"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Telefone do Responsável')}<input id="reg-phone" type="tel" value="${r.responsiblePhone || ''}" placeholder="(11) 99999-9999"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Modalidade *')}
+          <select id="reg-compcat" style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
+            <option value="DBV" ${(r.competitionCategory || 'DBV') === 'DBV' ? 'selected' : ''}>DBV — Desbravadores</option>
+            <option value="AVT" ${r.competitionCategory === 'AVT' ? 'selected' : ''}>AVT — Aventureiros</option>
+          </select>
+        </div>
+        ${isEdit ? `
+        <div style="background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;">
+          <div style="font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">
+            🔑 Usuário vinculado: <strong>${linkedUser ? linkedUser.username : '— não encontrado'}</strong>
+          </div>
+          <div style="display:flex;align-items:center;gap:.75rem;">
+            <input id="reg-pwd" type="text" value="${S.generatedPwd}" placeholder="Deixe em branco para manter a senha atual"
+              style="flex:1;border:1.5px solid #e2e8f0;border-radius:.625rem;padding:.625rem;font-size:1rem;font-weight:700;letter-spacing:.1rem;background:#fff;outline:none;">
+            <button onclick="W.regenPwd()"
+              style="background:#0D2B6E;border:none;color:#fff;padding:.625rem .875rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔄 Gerar nova</button>
+          </div>
+          <div style="font-size:.75rem;color:#64748b;margin-top:.375rem;">A senha atual é criptografada e não pode ser exibida — gere uma nova apenas se precisar redefini-la</div>
+        </div>` : `
+        <div style="background:#f8fafc;border-radius:.875rem;padding:.75rem 1rem;font-size:.8rem;color:#64748b;">
+          🔑 Login e senha serão gerados automaticamente a partir do nome do responsável
+        </div>`}
+        ${isEdit ? `
+        <div style="display:flex;align-items:center;gap:.75rem;">
+          <input type="checkbox" id="reg-active" ${r.active !== false ? 'checked' : ''} style="width:1.1rem;height:1.1rem;">
+          <label for="reg-active" style="font-size:.9rem;font-weight:600;color:#374151;">Região ativa</label>
+        </div>` : ''}
+        <button onclick="W.saveRegion()" ${S.loading ? 'disabled' : ''}
+          style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          ${S.loading ? '⏳ Salvando...' : isEdit ? '💾 Salvar' : '+ Criar Região'}
+        </button>
+      </div>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: PARTICIPANTE ────────────────────────────────────────
+function mParticipantForm() {
+  const p = S.editingParticipant || {};
+  const isEdit = !!p.id;
+  const region = S.regions.find(r => r.id === p.regionId);
+  const sortedRegions = [...S.regions].sort((a, b) => a.name.localeCompare(b.name));
+  const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
+
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:420px;">
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">${isEdit ? 'Editar' : 'Novo'} Participante</h2>
+      <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>${lbl('Nome *')}<input id="pt-name" type="text" value="${p.name || ''}" placeholder="Nome completo"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Clube de origem')}<input id="pt-club" type="text" value="${p.club || ''}" placeholder="Ex: Águias Douradas"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Região *')}
+          <select id="pt-region" onchange="W.setParticipantRegion(this.value)"
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
+            <option value="" ${!p.regionId ? 'selected' : ''} disabled>Selecione a região...</option>
+            ${sortedRegions.map(r => `<option value="${r.id}" ${p.regionId === r.id ? 'selected' : ''}>${r.name}</option>`).join('')}
+          </select>
+        </div>
+        ${region ? `<div style="background:#f8fafc;border-radius:.875rem;padding:.75rem 1rem;font-size:.82rem;color:#64748b;">
+          Modalidade: <strong>${region.competitionCategory || 'DBV'}</strong> (derivada da região selecionada)
+        </div>` : ''}
+        <button onclick="W.saveParticipant()" ${S.loading ? 'disabled' : ''}
+          style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          ${S.loading ? '⏳ Salvando...' : (isEdit ? '💾 Salvar' : '+ Criar Participante')}
+        </button>
+      </div>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: IMPORTAR PARTICIPANTES (CSV/Excel) ──────────────────
+function mParticipantImport() {
+  const rows = S.importRows;
+  const errors = S.importErrors;
+  const hasResults = rows.length > 0 || errors.length > 0;
+
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content">
+      <div style="width:2.5rem;height:.25rem;background:#e2e8f0;border-radius:999px;margin:0 auto .875rem;"></div>
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 .5rem;">📥 Importar Participantes</h2>
+      <p style="font-size:.82rem;color:#64748b;margin:0 0 1rem;">
+        Arquivo CSV ou Excel com colunas: <strong>Nome, Clube, Região, Modalidade</strong><br>
+        <span style="font-size:.75rem;color:#94a3b8;">A região precisa bater com o nome cadastrado — a modalidade é derivada dela automaticamente.</span>
+      </p>
+      <div class="upload-area" onclick="document.getElementById('import-file').click()" style="margin-bottom:1rem;">
+        <div style="font-size:2rem;margin-bottom:.5rem;">📄</div>
+        <div style="font-weight:700;color:#374151;">Toque para selecionar o arquivo</div>
+        <div style="font-size:.78rem;color:#9ca3af;margin-top:.3rem;">.csv, .xlsx ou .xls</div>
+      </div>
+      <input type="file" id="import-file" accept=".csv,.xlsx,.xls" onchange="W.handleImportFile(event)">
+
+      ${hasResults ? `
+      <div style="display:flex;gap:.5rem;margin-bottom:.75rem;flex-wrap:wrap;">
+        <span style="background:#d1fae5;color:#065f46;font-size:.78rem;font-weight:700;padding:.3rem .75rem;border-radius:999px;">✅ ${rows.length} válido${rows.length !== 1 ? 's' : ''}</span>
+        ${errors.length ? `<span style="background:#fee2e2;color:#991b1b;font-size:.78rem;font-weight:700;padding:.3rem .75rem;border-radius:999px;">⚠️ ${errors.length} com erro</span>` : ''}
+      </div>
+      <div style="max-height:220px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:.75rem;margin-bottom:1rem;">
+        ${rows.map(r => `<div style="padding:.5rem .75rem;border-bottom:1px solid #f1f5f9;font-size:.82rem;">
+          <strong>${r.name}</strong> — ${r.club || '—'} · ${rname(r.regionId)} (${r.competitionCategory})
+        </div>`).join('')}
+        ${errors.map(e => `<div style="padding:.5rem .75rem;border-bottom:1px solid #f1f5f9;font-size:.82rem;color:#dc2626;">
+          ⚠️ Linha ${e.row}: ${e.reason}
+        </div>`).join('')}
+      </div>
+      <button onclick="W.confirmImport()" ${S.loading || rows.length === 0 ? 'disabled' : ''}
+        style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${(S.loading || rows.length === 0) ? .6 : 1};">
+        ${S.loading ? '⏳ Importando...' : `+ Importar ${rows.length} participante${rows.length !== 1 ? 's' : ''}`}
+      </button>` : ''}
+
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: UNIDADE ──────────────────────────────────────────────
+function mUnitForm() {
+  const u = S.editingUnit || {};
+  const isEdit = !!u.id;
+  const sortedRegions = [...S.regions].sort((a, b) => a.name.localeCompare(b.name));
+  const countIn = rid => S.units.filter(x => x.regionId === rid && x.id !== u.id).length;
+  const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
+
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:420px;">
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">${isEdit ? 'Editar' : 'Nova'} Unidade</h2>
+      <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>${lbl('Nome *')}<input id="un-name" type="text" value="${u.name || ''}" placeholder="Ex: Águias"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Grito de guerra')}<input id="un-warcry" type="text" value="${u.warCry || ''}" placeholder="Ex: Águias voam alto!"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Região *')}
+          <select id="un-region" ${isEdit ? 'disabled' : ''}
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:${isEdit ? '#f8fafc' : '#fff'};">
+            <option value="" ${!u.regionId ? 'selected' : ''} disabled>Selecione a região...</option>
+            ${sortedRegions.map(r => {
+              const count = countIn(r.id);
+              const full = count >= 3 && r.id !== u.regionId;
+              return `<option value="${r.id}" ${u.regionId === r.id ? 'selected' : ''} ${full ? 'disabled' : ''}>${r.name} (${count}/3)${full ? ' — cheia' : ''}</option>`;
+            }).join('')}
+          </select>
+        </div>
+        ${isEdit ? `<div style="font-size:.75rem;color:#94a3b8;">A região de uma unidade não pode ser alterada depois de criada.</div>` : ''}
+        <button onclick="W.saveUnit()" ${S.loading ? 'disabled' : ''}
+          style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          ${S.loading ? '⏳ Salvando...' : (isEdit ? '💾 Salvar' : '+ Criar Unidade')}
+        </button>
+      </div>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: ALOCAR PARTICIPANTES NA UNIDADE ─────────────────────
+function mUnitParticipants() {
+  const unit = S.units.find(u => u.id === S.editingUnit?.id) || S.editingUnit;
+  if (!unit) return '';
+  const search = (S.unitParticipantSearch || '').toLowerCase();
+  const list = S.participants
+    .filter(p => !search || (p.name || '').toLowerCase().includes(search))
+    .sort((a, b) => {
+      const aIn = a.unitId === unit.id, bIn = b.unitId === unit.id;
+      if (aIn !== bIn) return aIn ? -1 : 1;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content">
+      <div style="width:2.5rem;height:.25rem;background:#e2e8f0;border-radius:999px;margin:0 auto .875rem;"></div>
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 .25rem;">👥 ${unit.name}</h2>
+      <p style="font-size:.82rem;color:#64748b;margin:0 0 1rem;">Selecione os participantes desta unidade — participantes de outras regiões podem ser alocados como "clube amigo".</p>
+      <input type="text" placeholder="🔎 Buscar participante..." value="${S.unitParticipantSearch || ''}"
+        oninput="W.setUnitParticipantSearch(this.value)"
+        style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.75rem;font-size:.9rem;outline:none;margin-bottom:.875rem;">
+      <div style="max-height:50vh;overflow-y:auto;display:flex;flex-direction:column;gap:.375rem;">
+        ${list.length === 0 ? `<p style="text-align:center;color:#94a3b8;padding:1.5rem;">Nenhum participante encontrado</p>` : list.map(p => {
+          const inThis  = p.unitId === unit.id;
+          const inOther = !!p.unitId && !inThis;
+          const isGuest = p.regionId !== unit.regionId;
+          return `
+          <label style="display:flex;align-items:center;gap:.75rem;padding:.625rem .75rem;border-radius:.75rem;background:${inThis ? '#f0fdf4' : '#f8fafc'};cursor:pointer;">
+            <input type="checkbox" ${inThis ? 'checked' : ''} onchange="W.toggleUnitParticipant('${p.id}', this.checked)" style="width:1.1rem;height:1.1rem;flex-shrink:0;">
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:600;color:#1e293b;font-size:.88rem;">${p.name}${isGuest ? ' <span style="color:#92400e;font-size:.75rem;">(clube amigo)</span>' : ''}</div>
+              <div style="font-size:.75rem;color:#94a3b8;">${p.club ? `${p.club} · ` : ''}${rname(p.regionId)}${inOther ? ' · já em outra unidade' : ''}</div>
+            </div>
+          </label>`;
+        }).join('')}
+      </div>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:1rem;padding:.875rem;background:#0D2B6E;color:#fff;border:none;border-radius:1rem;font-weight:700;cursor:pointer;">Concluído</button>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: VINCULAR CONSELHEIRO ────────────────────────────────
+function mCounselorForm() {
+  const unit = S.units.find(u => u.id === S.counselorUnitId);
+  const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
+
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:400px;">
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 .25rem;">Vincular Conselheiro</h2>
+      <p style="font-size:.82rem;color:#64748b;margin:0 0 1.25rem;">Unidade: <strong>${unit?.name || '—'}</strong></p>
+      <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>${lbl('Nome completo *')}<input id="cn-name" type="text" placeholder="Nome do conselheiro"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div>${lbl('Telefone')}<input id="cn-phone" type="tel" placeholder="(11) 99999-9999"
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;"></div>
+        <div style="background:#f8fafc;border-radius:.875rem;padding:.75rem 1rem;font-size:.8rem;color:#64748b;">
+          🔑 Login e senha serão gerados automaticamente a partir do nome
+        </div>
+        <button onclick="W.saveCounselor()" ${S.loading ? 'disabled' : ''}
+          style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          ${S.loading ? '⏳ Salvando...' : '+ Vincular Conselheiro'}
+        </button>
+      </div>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: REGISTRAR INFRAÇÃO ────────────────────────────────────
+function mDisciplineForm() {
+  const type = S.disciplineTargetType;
+  const sortedRegions = [...S.regions].sort((a, b) => a.name.localeCompare(b.name));
+  const sortedUnits   = [...S.units].sort((a, b) => a.name.localeCompare(b.name));
+  const lbl = t => `<label style="display:block;font-size:.82rem;font-weight:700;color:#374151;margin-bottom:.375rem;">${t}</label>`;
+
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content" style="max-width:420px;">
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 1.25rem;">⚠️ Registrar Infração</h2>
+      <div style="display:flex;flex-direction:column;gap:.875rem;">
+        <div>${lbl('Alvo')}
+          <div style="display:flex;gap:.5rem;">
+            <button onclick="W.setDisciplineTargetType('region')"
+              style="flex:1;padding:.625rem;border-radius:.75rem;border:1.5px solid ${type === 'region' ? '#0D2B6E' : '#e2e8f0'};
+              background:${type === 'region' ? '#eff6ff' : '#fff'};color:${type === 'region' ? '#0D2B6E' : '#64748b'};
+              font-weight:700;font-size:.85rem;cursor:pointer;">🗺️ Região inteira</button>
+            <button onclick="W.setDisciplineTargetType('unit')"
+              style="flex:1;padding:.625rem;border-radius:.75rem;border:1.5px solid ${type === 'unit' ? '#0D2B6E' : '#e2e8f0'};
+              background:${type === 'unit' ? '#eff6ff' : '#fff'};color:${type === 'unit' ? '#0D2B6E' : '#64748b'};
+              font-weight:700;font-size:.85rem;cursor:pointer;">🏕️ Unidade específica</button>
+          </div>
+        </div>
+        <div>${lbl(type === 'region' ? 'Região *' : 'Unidade *')}
+          <select id="disc-target" style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;outline:none;background:#fff;">
+            <option value="" disabled selected>Selecione...</option>
+            ${type === 'region'
+              ? sortedRegions.map(r => `<option value="${r.id}">${r.name}</option>`).join('')
+              : sortedUnits.map(u => `<option value="${u.id}">${u.name} (${rname(u.regionId)})</option>`).join('')}
+          </select>
+        </div>
+        <div>${lbl('Motivo *')}<textarea id="disc-reason" rows="3" placeholder="Descreva a infração..."
+          style="width:100%;border:1.5px solid #e2e8f0;border-radius:.875rem;padding:.875rem;font-size:.9rem;resize:none;outline:none;font-family:inherit;"></textarea></div>
+        <div style="background:#fef2f2;border-radius:.875rem;padding:.75rem 1rem;font-size:.85rem;color:#991b1b;font-weight:700;">
+          Desconto automático: -5 pts
+        </div>
+        <button onclick="W.saveDiscipline()" ${S.loading ? 'disabled' : ''}
+          style="width:100%;background:#dc2626;color:#fff;border:none;padding:1.1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
+          ${S.loading ? '⏳ Salvando...' : '⚠️ Registrar Infração'}
+        </button>
+      </div>
+      <button onclick="W.closeModal()"
+        style="width:100%;margin-top:.625rem;padding:.875rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: CREDENCIAIS GERADAS (região ou usuário) ─────────────
+function mCredentialsModal() {
+  const { title, username, password } = S.createdCreds || {};
+  const row = (label, value, field) => `
+    <div>
+      <div style="font-size:.72rem;font-weight:700;color:#0D2B6E;">${label}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;">
+        <span style="font-size:1.05rem;font-weight:800;letter-spacing:${field === 'password' ? '.1rem' : '0'};color:#1e293b;">${value}</span>
+        <button onclick="W.copyCred('${field}')"
+          style="background:#0D2B6E;border:none;color:#fff;padding:.4rem .7rem;border-radius:.5rem;font-size:.72rem;font-weight:700;cursor:pointer;flex-shrink:0;">📋 Copiar</button>
+      </div>
+    </div>`;
+  return `
+  <div class="modal-overlay center" onclick="if(event.target===this)W.closeCredentials()">
+    <div class="modal-content" style="max-width:380px;text-align:center;">
+      <div style="font-size:2.5rem;margin-bottom:.5rem;">✅</div>
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 .375rem;">${title || 'Criado com sucesso!'}</h2>
+      <p style="font-size:.85rem;color:#64748b;margin:0 0 1.25rem;">Anote as credenciais de acesso:</p>
+      <div style="background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:.875rem;padding:1rem;text-align:left;margin-bottom:1.25rem;display:flex;flex-direction:column;gap:.75rem;">
+        ${row('Usuário', username, 'username')}
+        ${row('Senha', password, 'password')}
+      </div>
+      <button onclick="W.closeCredentials()"
+        style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1rem;border-radius:1rem;font-size:.95rem;font-weight:800;cursor:pointer;">Fechar</button>
     </div>
   </div>`;
 }
@@ -696,7 +1418,7 @@ function mChangePassword() {
             onkeydown="if(event.key==='Enter')W.doChangePassword()">
         </div>
         <button onclick="W.doChangePassword()" ${S.loading ? 'disabled' : ''}
-          style="width:100%;background:#166534;color:#fff;border:none;padding:1.1rem;
+          style="width:100%;background:#0D2B6E;color:#fff;border:none;padding:1.1rem;
           border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">
           ${S.loading ? '⏳ Salvando...' : 'Salvar Nova Senha'}
         </button>
@@ -710,19 +1432,31 @@ function mChangePassword() {
 // ── ACTIONS ───────────────────────────────────────────────────
 window.W = {
   logout() {
-    if (_unsubReqs)  _unsubReqs();
-    if (_unsubSubs)  _unsubSubs();
-    if (_unsubUsers) _unsubUsers();
+    if (_unsubReqs)         _unsubReqs();
+    if (_unsubSubs)         _unsubSubs();
+    if (_unsubRegions)      _unsubRegions();
+    if (_unsubParticipants) _unsubParticipants();
+    if (_unsubUnits)        _unsubUnits();
+    if (_unsubDiscipline)   _unsubDiscipline();
     authLogout();
   },
 
-  setTab(tab)      { S.adminTab = tab; render(); },
+  setTab(tab)      { S.adminTab = tab; S.sidebarOpen = false; render(); if (tab === 'ranking') refreshRanking(); },
+  toggleSidebar(open) { S.sidebarOpen = open; render(); },
   closeModal()     { S.modal = null; render(); },
+  closeCredentials() { S.modal = null; S.createdCreds = null; render(); },
+  copyCred(field) {
+    const text = S.createdCreds?.[field];
+    if (!text) return;
+    navigator.clipboard?.writeText(text)
+      .then(() => toast('Copiado! 📋'))
+      .catch(() => toast('Não foi possível copiar', 'error'));
+  },
   openChangePwd()  { S.modal = 'change-password'; render(); },
   openPhoto(url)   { S.photoUrl = url; S.modal = 'photo'; render(); },
   filterStatus(st) { S.filterStatus = st; render(); },
-  setRankingCat(c) { S.rankingCat = c; render(); },
   exportExcel()    { exportExcel(); },
+  exportUniformCsv() { exportUniformCsv(); },
 
   approve(id) { apiReview(id, 'approved', '', S.user).then(() => toast('✅ Aprovado!')); },
   reject(id)  {
@@ -761,6 +1495,33 @@ window.W = {
     S.editingReq = { ...S.editingReq, subItems: current };
     render();
   },
+  addQrVariant() {
+    const rows = [...document.querySelectorAll('#qrvariants-list .qr-variant-row')];
+    const current = rows.map(row => ({
+      id: row.dataset.id || `qv_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+      label: row.querySelector('.qv-label').value,
+      points: parseInt(row.querySelector('.qv-points').value) || 0
+    }));
+    current.push({ id: `qv_${Date.now()}`, label: '', points: 0 });
+    S.editingReq = { ...S.editingReq, qrVariants: current };
+    render();
+  },
+  removeQrVariant(idx) {
+    const rows = [...document.querySelectorAll('#qrvariants-list .qr-variant-row')];
+    const current = rows.map(row => ({
+      id: row.dataset.id || '',
+      label: row.querySelector('.qv-label').value,
+      points: parseInt(row.querySelector('.qv-points').value) || 0
+    }));
+    current.splice(idx, 1);
+    S.editingReq = { ...S.editingReq, qrVariants: current };
+    render();
+  },
+  toggleUniform(on) {
+    if (!on) return;
+    const set = (id, v, force) => { const el = document.getElementById(id); if (el && (force || !el.value)) el.value = v; };
+    set('rq-filledby', 'fiscal', true); set('rq-name', 'Inspeção de uniforme'); set('rq-pts', 10); set('rq-code', 'inspecao-uniforme');
+  },
   async saveReq() {
     const name     = document.getElementById('rq-name')?.value?.trim();
     const code     = document.getElementById('rq-code')?.value?.trim() || name?.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -768,7 +1529,10 @@ window.W = {
     const cat      = document.getElementById('rq-cat')?.value;
     const phase    = document.getElementById('rq-phase')?.value;
     const compCat  = document.getElementById('rq-compcat')?.value || 'Ambos';
-    const evalBy   = document.getElementById('rq-evalby')?.value || 'both';
+    const areaAtuacao = document.getElementById('rq-areaatuacao')?.value || '';
+    const uniform  = !!document.getElementById('rq-uniform')?.checked;
+    const uniPenalty = Math.max(0, Number(document.getElementById('rq-uni-penalty')?.value) || 0);
+    const filledBy = uniform ? 'fiscal' : (document.getElementById('rq-filledby')?.value || 'regional');
     const activeEl = document.getElementById('rq-active');
     const active   = activeEl ? activeEl.checked : true;
     const rows     = [...document.querySelectorAll('#subitems-list .sub-item-row')];
@@ -780,6 +1544,12 @@ window.W = {
     const pts = subItems.length > 0
       ? subItems.reduce((a, si) => a + si.points, 0)
       : parseInt(document.getElementById('rq-pts')?.value) || 0;
+    const qrRows = [...document.querySelectorAll('#qrvariants-list .qr-variant-row')];
+    const qrVariants = qrRows.map((row, i) => ({
+      id: row.dataset.id || `qv_${i}_${Date.now()}`,
+      label: row.querySelector('.qv-label').value.trim(),
+      points: parseInt(row.querySelector('.qv-points').value) || 0
+    })).filter(v => v.label);
     if (!name) { toast('Nome é obrigatório', 'error'); return; }
     if (!pts)  { toast('Pontuação inválida', 'error'); return; }
     S.loading = true; render();
@@ -787,8 +1557,10 @@ window.W = {
       await apiSaveReq({
         ...(S.editingReq?.id ? { id: S.editingReq.id } : {}),
         name, code, description: desc || '', category: cat, phase, points: pts,
-        competitionCategory: compCat, evaluatedBy: evalBy,
-        subItems: subItems.length > 0 ? subItems : null, active
+        competitionCategory: compCat, areaAtuacao, filledBy,
+        subItems: !uniform && subItems.length > 0 ? subItems : null,
+        qrVariants: !uniform && qrVariants.length > 0 ? qrVariants : null, active,
+        inspection: uniform ? 'uniforme' : null, uniformPenalty: uniform ? uniPenalty : null
       }, S.requirements.length);
       S.modal = null; S.editingReq = null;
       toast('Requisito salvo! ✅');
@@ -803,52 +1575,306 @@ window.W = {
   // ── Usuários ───────────────────────────────────────────────
   openUserForm(id) {
     S.editingUser  = id ? S.users.find(u => u.id === id) : null;
-    S.formRole     = S.editingUser?.role || 'region';
+    S.formRole     = S.editingUser?.role || null;
     S.generatedPwd = genPassword();
     S.modal = 'user-form'; render();
   },
   setFormRole(role) { S.formRole = role; render(); },
   regenPwd()        { S.generatedPwd = genPassword(); render(); },
   async saveUser() {
-    const name       = document.getElementById('u-name')?.value?.trim();
-    const phone      = document.getElementById('u-phone')?.value?.trim();
-    const username   = document.getElementById('u-username')?.value?.trim().toLowerCase();
-    const role       = document.getElementById('u-role')?.value;
-    const regionId   = document.getElementById('u-region')?.value || null;
-    const compCat    = document.getElementById('u-compcat')?.value || null;
-    const judgeCat   = document.getElementById('u-cat')?.value || null;
-    const pwd        = document.getElementById('u-pwd')?.value || S.generatedPwd;
+    const name     = document.getElementById('u-name')?.value?.trim();
+    const phone    = document.getElementById('u-phone')?.value?.trim();
+    // Conselheiro não mostra o select de perfil (é fixo) — mantém o role atual do usuário
+    const role     = document.getElementById('u-role')?.value || S.editingUser?.role;
+    const judgeCat = document.getElementById('u-cat')?.value || null;
+    const pwd      = document.getElementById('u-pwd')?.value || S.generatedPwd;
     if (!name || !role) { toast('Nome e perfil são obrigatórios', 'error'); return; }
-    if (!S.editingUser && !username) { toast('Usuário é obrigatório', 'error'); return; }
-    if (role === 'region' && !regionId)  { toast('Selecione uma região', 'error'); return; }
-    if (role === 'region' && !compCat)   { toast('Selecione a modalidade (DBV/AVT)', 'error'); return; }
     S.loading = true; render();
     try {
       if (S.editingUser) {
         await updateUser(S.editingUser.id, {
           name, phone: phone || '', role,
-          regionId: regionId || null,
-          competitionCategory: compCat || null,
           judgeCategory: judgeCat || null
-        });
+        }, getToken());
         toast('Usuário atualizado! ✅');
+        S.modal = null; S.editingUser = null;
       } else {
-        await createUser({
-          name, phone: phone || '', username, password: pwd, role,
-          regionId: regionId || null,
-          competitionCategory: compCat || null,
+        const { username } = await createUser({
+          name, phone: phone || '', password: pwd, role,
           judgeCategory: judgeCat || null
-        }, S.user);
-        toast(`✅ Usuário criado! Senha: ${pwd}`);
-        setTimeout(() => alert(`Usuário: ${username}\nSenha: ${pwd}\n\nAnote antes de fechar!`), 300);
+        }, getToken());
+        S.createdCreds = { title: 'Usuário criado!', username, password: pwd };
+        S.modal = 'credentials';
+        S.editingUser = null;
       }
-      S.modal = null; S.editingUser = null;
+      await refreshUsers();
     } catch (e) { toast(e.message, 'error'); }
     S.loading = false; render();
   },
   toggleUser(id, currentlyActive) {
-    apiToggleUser(id, currentlyActive)
-      .then(() => toast(currentlyActive ? 'Usuário desativado' : 'Usuário ativado!'));
+    apiToggleUser(id, currentlyActive, getToken())
+      .then(() => { toast(currentlyActive ? 'Usuário desativado' : 'Usuário ativado!'); refreshUsers(); });
+  },
+  deleteUser(id, name) {
+    if (!confirm(`Excluir permanentemente o usuário "${name}"?\n\nEsta ação não pode ser desfeita.`)) return;
+    apiDeleteUser(id, getToken()).then(() => { toast('Usuário excluído.', 'info'); refreshUsers(); });
+  },
+  deleteSubmission(id) {
+    if (!confirm('Excluir esta comprovação permanentemente?\n\nEsta ação não pode ser desfeita.')) return;
+    apiDeleteSubmission(id).then(() => toast('Comprovação excluída.', 'info'));
+  },
+
+  // ── Regiões ────────────────────────────────────────────────
+  openRegionForm(id) {
+    S.editingRegion = id ? S.regions.find(r => r.id === id) : null;
+    // Ao editar, a senha não é mais recuperável (hash) — o campo começa vazio
+    // e só é enviada se o admin explicitamente gerar/preencher uma nova.
+    S.generatedPwd = id ? '' : genPassword();
+    S.modal = 'region-form'; render();
+  },
+  async saveRegion() {
+    const name          = document.getElementById('reg-name')?.value?.trim();
+    const responsible   = document.getElementById('reg-responsible')?.value?.trim();
+    const phone         = document.getElementById('reg-phone')?.value?.trim();
+    const compCat       = document.getElementById('reg-compcat')?.value || 'DBV';
+    const pwd           = document.getElementById('reg-pwd')?.value || S.generatedPwd;
+    const activeEl      = document.getElementById('reg-active');
+    const active        = activeEl ? activeEl.checked : true;
+    if (!name) { toast('Nome é obrigatório', 'error'); return; }
+    S.loading = true; render();
+    try {
+      if (S.editingRegion?.id) {
+        const linkedUser = S.users.find(u => u.regionId === S.editingRegion.id && u.role === 'region');
+        await apiUpdateRegion(S.editingRegion.id, {
+          name, responsible: responsible || '', responsiblePhone: phone || '',
+          competitionCategory: compCat, active
+        }, linkedUser?.id, pwd, getToken());
+        toast('Região salva! ✅');
+        S.modal = null; S.editingRegion = null;
+      } else {
+        const { username, password } = await apiCreateRegion({
+          name, responsible: responsible || '', responsiblePhone: phone || '',
+          competitionCategory: compCat, password: pwd
+        }, getToken());
+        S.createdCreds = { title: 'Região criada!', username, password };
+        S.editingRegion = null;
+        S.modal = 'credentials';
+      }
+      await refreshUsers();
+    } catch (e) { toast(e.message || 'Erro ao salvar.', 'error'); }
+    S.loading = false; render();
+  },
+  delRegion(id, name) {
+    if (!confirm(`Excluir a região "${name}"?\n\nIsso também excluirá o usuário/login vinculado.\nEsta ação não pode ser desfeita.`)) return;
+    const linkedUser = S.users.find(u => u.regionId === id && u.role === 'region');
+    apiDelRegion(id, linkedUser?.id, getToken()).then(() => { toast('Região e usuário excluídos.', 'info'); refreshUsers(); });
+  },
+
+  // ── Participantes ──────────────────────────────────────────
+  setParticipantFilterRegion(v) { S.participantFilterRegion = v; render(); },
+  setParticipantFilterCat(v)    { S.participantFilterCat = v; render(); },
+  openParticipantForm(id) {
+    S.editingParticipant = id ? { ...S.participants.find(p => p.id === id) } : {};
+    S.modal = 'participant-form'; render();
+  },
+  setParticipantRegion(regionId) {
+    S.editingParticipant = { ...S.editingParticipant, regionId };
+    render();
+  },
+  async saveParticipant() {
+    const name   = document.getElementById('pt-name')?.value?.trim();
+    const club   = document.getElementById('pt-club')?.value?.trim();
+    const regionId = document.getElementById('pt-region')?.value;
+    if (!name || !regionId) { toast('Nome e região são obrigatórios', 'error'); return; }
+    const region = S.regions.find(r => r.id === regionId);
+    const competitionCategory = region?.competitionCategory || 'DBV';
+    S.loading = true; render();
+    try {
+      if (S.editingParticipant?.id) {
+        await updateParticipant(S.editingParticipant.id, { name, club: club || '', regionId, competitionCategory });
+        toast('Participante atualizado! ✅');
+      } else {
+        await createParticipant({ name, club: club || '', regionId, competitionCategory });
+        toast('Participante criado! ✅');
+      }
+      S.modal = null; S.editingParticipant = null;
+    } catch (e) { toast(e.message || 'Erro ao salvar.', 'error'); }
+    S.loading = false; render();
+  },
+  deleteParticipant(id, name) {
+    if (!confirm(`Excluir permanentemente o participante "${name}"?\n\nEsta ação não pode ser desfeita.`)) return;
+    apiDeleteParticipant(id).then(() => toast('Participante excluído.', 'info'));
+  },
+
+  openParticipantImport() {
+    S.importRows = []; S.importErrors = [];
+    S.modal = 'participant-import'; render();
+  },
+  handleImportFile(evt) {
+    const file = evt.target.files[0];
+    if (!file) return;
+    if (typeof window.XLSX === 'undefined') { toast('Biblioteca XLSX não carregada', 'error'); return; }
+    const isCsv = /\.csv$/i.test(file.name);
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        // CSV é lido como texto UTF-8 (readAsText); type:'array' em CSV faz o SheetJS
+        // tratar os bytes como binário/latin1 e corromper acentuação (ex: "João" → "JoÃ£o")
+        const wb = isCsv
+          ? window.XLSX.read(e.target.result, { type: 'string' })
+          : window.XLSX.read(e.target.result, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+        if (rows.length < 2) { toast('Arquivo vazio ou sem dados', 'error'); return; }
+
+        const headers  = rows[0].map(h => String(h).trim().toLowerCase());
+        const idxName   = headers.findIndex(h => h.includes('nome'));
+        const idxClub   = headers.findIndex(h => h.includes('clube'));
+        const idxRegion = headers.findIndex(h => h.includes('regi'));
+
+        const valid = [];
+        const errors = [];
+        rows.slice(1).forEach((row, i) => {
+          const rowNum = i + 2;
+          const name       = idxName   >= 0 ? String(row[idxName]   || '').trim() : '';
+          const club       = idxClub   >= 0 ? String(row[idxClub]   || '').trim() : '';
+          const regionName = idxRegion >= 0 ? String(row[idxRegion] || '').trim() : '';
+          if (!name && !club && !regionName) return; // linha em branco, ignora
+          if (!name)       { errors.push({ row: rowNum, reason: 'nome vazio' }); return; }
+          if (!regionName) { errors.push({ row: rowNum, reason: `"${name}": região vazia` }); return; }
+          const region = S.regions.find(r => r.name.toLowerCase() === regionName.toLowerCase());
+          if (!region)     { errors.push({ row: rowNum, reason: `"${name}": região "${regionName}" não encontrada` }); return; }
+          valid.push({ name, club, regionId: region.id, competitionCategory: region.competitionCategory || 'DBV' });
+        });
+
+        S.importRows = valid;
+        S.importErrors = errors;
+        render();
+      } catch (err) {
+        toast('Erro ao ler arquivo: ' + err.message, 'error');
+      }
+    };
+    if (isCsv) reader.readAsText(file, 'UTF-8');
+    else reader.readAsArrayBuffer(file);
+  },
+  async confirmImport() {
+    if (S.importRows.length === 0) return;
+    S.loading = true; render();
+    try {
+      const count = await createParticipantsBulk(S.importRows);
+      toast(`✅ ${count} participante${count !== 1 ? 's' : ''} importado${count !== 1 ? 's' : ''}!`);
+      S.modal = null; S.importRows = []; S.importErrors = [];
+    } catch (e) { toast(e.message || 'Erro ao importar.', 'error'); }
+    S.loading = false; render();
+  },
+
+  // ── Unidades ───────────────────────────────────────────────
+  setUnitFilterRegion(v) { S.unitFilterRegion = v; render(); },
+  openUnitForm(id) {
+    S.editingUnit = id ? { ...S.units.find(u => u.id === id) } : {};
+    S.modal = 'unit-form'; render();
+  },
+  async saveUnit() {
+    const name     = document.getElementById('un-name')?.value?.trim();
+    const warCry   = document.getElementById('un-warcry')?.value?.trim();
+    const regionId = document.getElementById('un-region')?.value;
+    if (!name || !regionId) { toast('Nome e região são obrigatórios', 'error'); return; }
+    const isEdit = !!S.editingUnit?.id;
+    if (!isEdit && S.units.filter(u => u.regionId === regionId).length >= 3) {
+      toast('Esta região já tem 3 unidades (limite máximo)', 'error'); return;
+    }
+    S.loading = true; render();
+    try {
+      if (isEdit) {
+        await updateUnit(S.editingUnit.id, { name, warCry: warCry || '' });
+        toast('Unidade atualizada! ✅');
+      } else {
+        await createUnit({ name, warCry: warCry || '', regionId });
+        toast('Unidade criada! ✅');
+      }
+      S.modal = null; S.editingUnit = null;
+    } catch (e) { toast(e.message || 'Erro ao salvar.', 'error'); }
+    S.loading = false; render();
+  },
+  deleteUnit(id, name) {
+    if (!confirm(`Excluir a unidade "${name}"?\n\nOs participantes alocados serão desvinculados (não excluídos).\nEsta ação não pode ser desfeita.`)) return;
+    const memberIds = S.participants.filter(p => p.unitId === id).map(p => p.id);
+    apiDeleteUnit(id, memberIds).then(() => toast('Unidade excluída.', 'info'));
+  },
+  openUnitParticipants(id) {
+    S.editingUnit = S.units.find(u => u.id === id);
+    S.unitParticipantSearch = '';
+    S.modal = 'unit-participants'; render();
+  },
+  setUnitParticipantSearch(v) { S.unitParticipantSearch = v; render(); },
+  toggleUnitParticipant(participantId, checked) {
+    allocateParticipant(participantId, checked ? S.editingUnit.id : null)
+      .catch(e => toast(e.message || 'Erro ao alocar participante', 'error'));
+  },
+
+  openCounselorForm(unitId) {
+    S.counselorUnitId = unitId;
+    S.modal = 'counselor-form'; render();
+  },
+  async saveCounselor() {
+    const name  = document.getElementById('cn-name')?.value?.trim();
+    const phone = document.getElementById('cn-phone')?.value?.trim();
+    if (!name) { toast('Nome é obrigatório', 'error'); return; }
+    const unit   = S.units.find(u => u.id === S.counselorUnitId);
+    const region = S.regions.find(r => r.id === unit?.regionId);
+    S.loading = true; render();
+    try {
+      const { username, password } = await createUser({
+        name, phone: phone || '', role: 'counselor',
+        unitId: S.counselorUnitId, regionId: unit?.regionId || null,
+        competitionCategory: region?.competitionCategory || 'DBV'
+      }, getToken());
+      S.createdCreds = { title: 'Conselheiro vinculado!', username, password };
+      S.modal = 'credentials';
+      await refreshUsers();
+    } catch (e) { toast(e.message || 'Erro ao vincular.', 'error'); }
+    S.loading = false; render();
+  },
+
+  // ── Disciplina ─────────────────────────────────────────────
+  openDisciplineForm() {
+    S.disciplineClientId = (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `c${Date.now()}${Math.random().toString(36).slice(2, 10)}`);   // um id por formulário: clique duplo/reenvio não duplica
+    S.disciplineTargetType = 'region';
+    S.modal = 'discipline-form'; render();
+  },
+  setDisciplineTargetType(t) { S.disciplineTargetType = t; render(); },
+  async saveDiscipline() {
+    const targetId = document.getElementById('disc-target')?.value;
+    const reason   = document.getElementById('disc-reason')?.value?.trim();
+    if (!targetId || !reason) { toast('Selecione o alvo e descreva o motivo', 'error'); return; }
+    const type = S.disciplineTargetType;
+    const targetName = type === 'region'
+      ? S.regions.find(r => r.id === targetId)?.name
+      : S.units.find(u => u.id === targetId)?.name;
+    if (S.loading) return;
+    const recent = findRecentSameInfraction(S.disciplinaryActions, { targetType: type, targetId, reason });
+    let confirmDuplicate = false;
+    if (recent) {
+      const mins = Math.max(0, Math.round((Date.now() - (recent.createdAt?.seconds || 0) * 1000) / 60000));
+      if (!confirm(`A mesma infração (mesmo alvo e motivo) já foi registrada há ${mins} min por ${recent.createdByName || recent.createdBy || 'alguém'}.\n\nRegistrar mesmo assim? O desconto de 5 pts seria aplicado de novo.`)) return;
+      confirmDuplicate = true;
+    }
+    S.loading = true; render();
+    try {
+      try {
+        await createDisciplinaryAction({ targetType: type, targetId, targetName, reason, clientId: S.disciplineClientId, confirmDuplicate }, S.user);
+      } catch (e) {
+        if (e.code === 'DUPLICATE_RECENT' && confirm(e.message)) await createDisciplinaryAction({ targetType: type, targetId, targetName, reason, clientId: S.disciplineClientId, confirmDuplicate: true }, S.user);
+        else throw e;
+      }
+      toast('⚠️ Infração registrada.', 'info');
+      S.modal = null;
+    } catch (e) { if (e.code !== 'DUPLICATE_RECENT') toast(e.message || 'Erro ao registrar.', 'error'); }
+    S.loading = false; render();
+  },
+  deleteDiscipline(id) {
+    if (!confirm('Excluir este registro de disciplina? O desconto de pontos será removido.')) return;
+    apiDeleteDiscipline(id).then(() => toast('Registro excluído.', 'info'));
   },
 
   // ── Senha ──────────────────────────────────────────────────
@@ -857,17 +1883,15 @@ window.W = {
     const newPwd  = document.getElementById('pwd-new')?.value;
     const confirm = document.getElementById('pwd-confirm')?.value;
     if (!current || !newPwd || !confirm) { toast('Preencha todos os campos', 'error'); return; }
-    if (S.user.password !== current)     { toast('Senha atual incorreta', 'error');   return; }
     if (newPwd.length < 4)               { toast('Mínimo 4 caracteres', 'error');     return; }
     if (newPwd !== confirm)              { toast('As senhas não coincidem', 'error'); return; }
     S.loading = true; render();
     try {
-      await updatePassword(S.user.id, newPwd);
-      S.user = { ...S.user, password: newPwd };
+      await updatePassword(S.user.id, newPwd, getToken(), current);
       saveSession(S.user);
       toast('✅ Senha alterada com sucesso!');
       S.modal = null;
-    } catch (e) { toast('Erro ao alterar senha', 'error'); }
+    } catch (e) { toast(e.message || 'Erro ao alterar senha', 'error'); }
     S.loading = false; render();
   },
 };

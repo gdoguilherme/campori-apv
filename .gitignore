@@ -20,6 +20,25 @@ server/uploads/
 
 # Credenciais Google (não commitar chave privada)
 server/credentials.json
+server/firebase-credentials.json
+server/campori-apv-firebase-adminsdk.json
+server/*firebase-adminsdk*.json
 
 # Fly.io
 server/.fly/
+
+# Servidor local (offline) — dados do evento, logs, backups, segredos
+local-server/data/
+local-server/logs/
+local-server/backups/
+local-server/.env
+!local-server/.env.example
+
+# HTTPS / certificados do servidor local — NUNCA versionar (chave privada!)
+local-server/certs/
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.cer

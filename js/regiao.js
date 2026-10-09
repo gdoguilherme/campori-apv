@@ -3,9 +3,10 @@ import {
   subReqs, subSubs, subRegions, setRegionCache, rname, fmtDate, toast, showBanner,
   addSubmission, uploadFile, updateSubmissionProof, updatePassword, reqFilledBy,
   subUnits, computeUnitScores, renderAnonRanking, subParticipants, updateRegionProfile,
-  subDisciplinaryActions,
+  subDisciplinaryActions, refreshNow,
   CATEGORIES
 } from './api.js';
+import { mountPortalBar } from './portalBar.js';
 import { loadAnonRanking, rankingStampHtml } from './ranking.js';
 
 // ── CONFIGURAÇÃO POR TEMA ──────────────────────────────────────
@@ -68,6 +69,7 @@ export function init(theme) {
 
   S.user = user;
   startExpiryWatcher();
+  mountPortalBar({ getPending: async () => 0, syncNow: async () => { await refreshNow(); return { sent: 0 }; } });
 
   _unsubReqs        = subReqs(reqs => { S.requirements = reqs; render(); });
   _unsubSubs        = subSubs(user.regionId, subs => { S.submissions = subs; render(); });
@@ -149,7 +151,7 @@ function vPortal() {
   const userCompCat = user.competitionCategory || null;
   const visibleReqs = S.requirements.filter(r =>
     r.active !== false &&
-    reqFilledBy(r) !== 'conselheiro' &&
+    reqFilledBy(r) !== 'conselheiro' && r.inspection !== 'uniforme' &&
     (!userCompCat || !r.competitionCategory || r.competitionCategory === 'Ambos' || r.competitionCategory === userCompCat)
   );
   const totalPossible = visibleReqs.reduce((a, r) => a + r.points, 0);

@@ -269,3 +269,32 @@ O card **"✅ pts confirmados"** é a pontuação **total da unidade**, calculad
   A fila, o scan e a regra de duplicidade **não foram alterados**.
 - Testes: o total do aparelho == ranking do servidor em **4000 cenários aleatórios** e no cenário 100 + 50 + 30 = 180, no servidor
   local e no adaptador da nuvem (`breakdown.test.js`, `portal-points.test.js`, `sync-cloud.test.js`).
+
+
+## Pacote final pré-evento
+
+### Inspeção de Uniforme
+- **Regra única** em `shared/uniforme.js` (cópia em `server/shared/`, teste de paridade): `pontos = max(0, máx − erros × desconto)`; as 8 categorias da ficha;
+  *Opcionais* só registra. Máx = `points` do requisito; desconto = `uniformPenalty` (padrão 10 / −1). O servidor **recalcula** os pontos (ignora o que o aparelho mandar).
+- Requisito com `inspection: 'uniforme'` (tipo Fiscal), configurado no admin. Fica **fora** das telas comuns do fiscal/região e do "enviar" do conselheiro (que vê só leitura em *pontos possíveis*).
+- `POST /submissions/fiscal-suggestion` aceita `uniformInspection { erros, observacoes }` + `clientId`/`evaluatedAt` (mesma fila/idempotência do fiscal); grava `uniformInspection {erros, observacoes, avaliadorId, avaliadorNome, avaliadoEm}`
+  na submission **da unidade** (pendente). Reavaliação atualiza a mesma submission (a mais recente vale). Na nuvem: `api.doUniformInspection` (Firestore) com a mesma regra.
+- Admin: detalhe na revisão (Fila/Histórico) e `CSV Uniforme` (`;`, BOM, aspas escapadas, proteção contra fórmula).
+
+### Fotos só no PC
+`POST /upload` grava em `data/uploads` e devolve a URL **relativa** `/files/<região>/<arquivo>` (vale por domínio ou IP; URLs antigas de host local são reescritas para o endereço atual).
+A sincronização leva só esse caminho; na nuvem `proofBlock` mostra "📍 Foto disponível apenas no PC do evento" (`shared/proof.js`). `/files` envia `nosniff` e sandbox p/ html/svg.
+`/status` mostra nº de arquivos/tamanho; `npm run backup-uploads [destino]` copia e confere.
+
+### Disciplina em um único lugar
+Id do documento = `disc_<clientId>` (igual local e nuvem) → reenvio/sync não duplicam; **exclusão vence** (não ressuscita). `origin` local|cloud: a mesma infração (alvo + motivo) lançada nos dois lados em **< 10 min**
+conta **uma vez** (ranking, bootstrap e portal iguais; `dedupeDisciplinaryActions`). Mesma origem em < 10 min: `409 DUPLICATE_RECENT` / confirmação no admin; ambas contam se confirmadas. Dados antigos (sem `origin`) não mudam.
+
+### Barra de todos os portais, versão e aparelhos antigos
+`js/portalBar.js` (🟢/🟡/🔴, contagem, Sincronizar agora, versão = `VERSION` do `sw.js`, Atualizar app). `GET /sync/state` e `POST /sync/cloud-now` (qualquer perfil logado; `pendingCloud` só conta com a sincronização ligada).
+`js/compat.js` (injetado só no servidor local) avisa iOS < 16.4 / Chrome < 89. `shared/sync.js › counselorPortalTotals` é a conta do portal do conselheiro (teste de regressão ponta a ponta confere com o ranking a cada sincronização).
+
+### Operação no PC
+`/status` (contagens, disco, certificado, backup) + `GET /status/api/backup`; `npm run preflight`; `npm run resetar-eventos-de-teste`; `npm run backup-uploads`; `npm run dbtool`. Detalhes e passo a passo em `local-server/GUIA-WINDOWS.md` (Parte 3).
+
+**Limitações conhecidas:** fotos só no PC; sem internet o 1º acesso/instalação de um aparelho novo não acontece; iOS < 16.4 / Chrome < 89 não usam o modo local; a inspeção só pontua após aprovação; mudanças de código chegam aos celulares via *Atualizar app*.

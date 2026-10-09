@@ -27,7 +27,7 @@ export function createPageInjector({ vendorDir, localAppMode = false, importMapJ
     });
     // 2) o que vai logo no começo do <head> (import map precisa vir ANTES de qualquer script de módulo)
     let head = '<link rel="help" href="/ajuda">';
-    if (localAppMode && importMapJson) head = `<script>window.__CAMPORI_LOCAL_APP=1</script><script type="importmap">${importMapJson}</script>` + head;
+    if (localAppMode && importMapJson) head = `<script>window.__CAMPORI_LOCAL_APP=1</script><script type="importmap">${importMapJson}</script><script src="/js/compat.js"></script>` + head;
     if (/\/login\.html$/.test(pathname)) head += HELP_PILL;
     out = /<head[^>]*>/i.test(out) ? out.replace(/<head[^>]*>/i, m => `${m}\n  ${head}`) : head + out;
     return out;

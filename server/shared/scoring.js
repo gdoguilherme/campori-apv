@@ -18,6 +18,32 @@ export function tsSeconds(ts) {
   return Number.isNaN(ms) ? 0 : ms / 1000;
 }
 
+// ── DISCIPLINA: idempotência ─────────────────────────────────
+// Cada ação nasce com `clientId` (id do documento = `disc_<clientId>`, igual nos dois lados → reenvio/sync não duplica) e
+// `origin` ('local' | 'cloud'). Se a MESMA infração (mesmo alvo + motivo) foi lançada nos DOIS lados em menos de 10 min,
+// é a mesma penalidade digitada duas vezes: conta uma só vez (a mais antiga). Mesma origem = o admin foi avisado e confirmou → contam as duas.
+export const DISCIPLINE_DUP_WINDOW_MS = 10 * 60_000;
+export const normalizeReason = r => String(r ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+const discMs = d => tsSeconds(d.createdAt) * 1000;
+export const sameInfraction = (a, b) => a.targetType === b.targetType && a.targetId === b.targetId && normalizeReason(a.reason) === normalizeReason(b.reason);
+
+export function dedupeDisciplinaryActions(actions = [], windowMs = DISCIPLINE_DUP_WINDOW_MS) {
+  const sorted = [...actions].sort((a, b) => discMs(a) - discMs(b) || String(a.id).localeCompare(String(b.id)));
+  const kept = [], duplicates = [];
+  for (const d of sorted) {
+    const twin = d.origin && kept.find(k => k.origin && k.origin !== d.origin && sameInfraction(k, d) && Math.abs(discMs(d) - discMs(k)) < windowMs);
+    if (twin) duplicates.push({ ...d, duplicateOf: twin.id }); else kept.push(d);
+  }
+  return { kept, duplicates };
+}
+
+// Última infração igual (alvo + motivo) dentro da janela — base do aviso "já existe a mesma infração" no admin
+export function findRecentSameInfraction(actions = [], { targetType, targetId, reason }, nowMs = Date.now(), windowMs = DISCIPLINE_DUP_WINDOW_MS) {
+  const probe = { targetType, targetId, reason };
+  return [...actions].filter(a => sameInfraction(a, probe) && nowMs - discMs(a) < windowMs && nowMs - discMs(a) > -windowMs)
+    .sort((a, b) => discMs(b) - discMs(a))[0] || null;
+}
+
 export function isDeadlinePassed(req, nowMs = Date.now()) {
   if (!req.deadline) return false;
   const d = req.deadline.toDate ? req.deadline.toDate() : new Date(
@@ -63,7 +89,7 @@ export function computeUnitScores(submissions, units, disciplinaryActions = []) 
 
   // Disciplina: desconta pontos da unidade específica, ou de todas as unidades
   // da região (não altera "count" de aprovações — é só uma penalidade de pontos)
-  disciplinaryActions.forEach(d => {
+  dedupeDisciplinaryActions(disciplinaryActions).kept.forEach(d => {
     const pts = d.points || DISCIPLINE_POINTS;
     if (d.targetType === 'unit') {
       if (scores[d.targetId]) scores[d.targetId].total -= pts;
@@ -87,7 +113,7 @@ export function computeUnitBreakdown({ unit, unitSubmissions = [], regionSubmiss
   const one = (subs, disc = []) => computeUnitScores(subs, [unit], disc)[0]?.total ?? 0;
   const own = one(unitSubmissions.filter(s => s.unitId === unit.id));
   const region = one(regionSubmissions.filter(s => !s.unitId && s.regionId === unit.regionId));
-  const discipline = disciplinaryActions
+  const discipline = dedupeDisciplinaryActions(disciplinaryActions).kept
     .filter(d => (d.targetType === 'unit' && d.targetId === unit.id) || (d.targetType === 'region' && d.targetId === unit.regionId))
     .reduce((a, d) => a + (d.points || DISCIPLINE_POINTS), 0);
   const total = one([...unitSubmissions, ...regionSubmissions], disciplinaryActions);   // exatamente o que o ranking calcula (com o piso em 0)

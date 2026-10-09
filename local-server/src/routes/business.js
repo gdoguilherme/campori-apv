@@ -2,8 +2,9 @@ import express from 'express';
 import { httpError } from '../db.js';
 import { ADMIN_ROLES } from '../auth.js';
 import {
-  computeUnitScores, computeStars, reqFilledBy, isDeadlinePassed, DISCIPLINE_POINTS
+  computeUnitScores, computeStars, reqFilledBy, isDeadlinePassed, DISCIPLINE_POINTS, findRecentSameInfraction
 } from '../../../shared/scoring.js';
+import { isUniformReq, normalizeUniformInspection, computeUniformPoints } from '../../../shared/uniforme.js';
 
 export function businessRouter({ store, auth }) {
   const r = express.Router();
@@ -75,14 +76,26 @@ export function businessRouter({ store, auth }) {
   //  · `evaluatedAt` (ms): se já existe avaliação MAIS RECENTE para o mesmo item, a antiga não sobrescreve (result: 'superseded');
   //  · nunca duplica: sem `existingSubId` (ou com id que sumiu), procura a avaliação do fiscal para o mesmo região/unidade + requisito.
   r.post('/submissions/fiscal-suggestion', requireAuth(['judge', ...ADMIN_ROLES]), (req, res) => {
-    const { requirementId, regionId, unitId = null, points, subItemScores = null, subItemPcts = null, existingSubId = null, clientId = null, evaluatedAt = null } = req.body || {};
-    if (typeof points !== 'number' || points < 0) throw httpError(400, 'points inválido');
+    const { requirementId, unitId = null, subItemScores = null, subItemPcts = null, existingSubId = null, clientId = null, evaluatedAt = null, uniformInspection = null } = req.body || {};
+    let { regionId, points } = req.body || {};
+    if (uniformInspection === null && (typeof points !== 'number' || points < 0)) throw httpError(400, 'points inválido');
     if (clientId !== null && (typeof clientId !== 'string' || clientId.length > 80)) throw httpError(400, 'clientId inválido');
     const evalAt = Number.isFinite(Number(evaluatedAt)) && evaluatedAt !== null ? Number(evaluatedAt) : null;
     const user = req.user;
     const out = store.tx(() => {
       const req_ = store.get('requirements', requirementId);
       if (!req_) throw httpError(404, 'Requisito não encontrado');
+      // Inspeção de uniforme: pontos calculados AQUI pela regra única (shared/uniforme.js), sempre no nível da unidade
+      let inspection = null;
+      if (uniformInspection !== null) {
+        if (!isUniformReq(req_)) throw httpError(422, 'Este requisito não é uma Inspeção de uniforme');
+        const unit = unitId ? store.get('units', unitId) : null;
+        if (!unit) throw httpError(422, 'Selecione a unidade inspecionada');
+        regionId = unit.regionId;
+        const norm = normalizeUniformInspection(uniformInspection);
+        points = computeUniformPoints(norm.erros, req_).pontos;
+        inspection = { ...norm, avaliadorId: user.id, avaliadorNome: user.name, avaliadoEm: evalAt ?? Date.now() };
+      } else if (isUniformReq(req_)) throw httpError(422, 'A Inspeção de uniforme é preenchida na tela própria');
       let target = existingSubId ? store.get('submissions', existingSubId) : null;
       if (target && target.requirementId !== requirementId) target = null; // id de outro requisito: ignora
       if (!target) {
@@ -95,7 +108,8 @@ export function businessRouter({ store, auth }) {
         requirementPoints: points, subItemScores, subItemPcts, status: 'pending', fiscalSuggestion: true,
         notes: `Avaliado por: ${user.name}`, submittedAt: { __serverTimestamp: true },
         submittedBy: user.username, submittedByName: user.name,
-        ...(clientId ? { fiscalClientId: clientId } : {}), ...(evalAt !== null ? { fiscalEvaluatedAt: evalAt } : {})
+        ...(clientId ? { fiscalClientId: clientId } : {}), ...(evalAt !== null ? { fiscalEvaluatedAt: evalAt } : {}),
+        ...(inspection ? { uniformInspection: inspection } : {})
       };
       if (target) return { ...store.update('submissions', target.id, base), result: 'updated' };
       return {
@@ -130,16 +144,36 @@ export function businessRouter({ store, auth }) {
   });
 
   // ── DISCIPLINA (-5 pts fixos) ───────────────────────────────
+  // Idempotente: `clientId` (UUID do formulário) vira o id do documento (`disc_<clientId>`) — clique duplo, reenvio e sincronização
+  // com a nuvem (mesmo id nos dois lados) nunca somam duas vezes; se a ação foi EXCLUÍDA, a exclusão vence (não ressuscita).
+  // Mesma infração (alvo + motivo) em menos de 10 min → 409 DUPLICATE_RECENT; o admin confirma com `confirmDuplicate: true`.
   r.post('/discipline', requireAuth(ADMIN_ROLES), (req, res) => {
-    const { targetType, targetId, reason } = req.body || {};
+    const { targetType, targetId, reason, clientId = null, confirmDuplicate = false } = req.body || {};
     if (!['region', 'unit'].includes(targetType)) throw httpError(400, 'targetType deve ser "region" ou "unit"');
     if (!reason || !String(reason).trim()) throw httpError(400, 'Informe o motivo');
+    if (clientId !== null && !/^[A-Za-z0-9_-]{8,80}$/.test(String(clientId))) throw httpError(400, 'clientId inválido');
     const target = store.get(targetType === 'region' ? 'regions' : 'units', targetId);
     if (!target) throw httpError(404, 'Alvo não encontrado');
-    res.json(store.insert('disciplinaryActions', {
-      targetType, targetId, targetName: target.name, reason: String(reason).trim(), points: DISCIPLINE_POINTS,
-      createdAt: { __serverTimestamp: true }, createdBy: req.user.username || 'admin', createdByName: req.user.name || 'Administrador'
-    }));
+    const out = store.tx(() => {
+      const id = clientId ? `disc_${clientId}` : undefined;
+      if (id) {
+        const row = store.db.prepare('SELECT deleted FROM disciplinaryActions WHERE id = ?').get(id);
+        if (row?.deleted) return { id, result: 'deleted-wins' };
+        const existing = row && store.get('disciplinaryActions', id);
+        if (existing) return { ...existing, result: 'idempotent' };
+      }
+      const recent = findRecentSameInfraction(store.list('disciplinaryActions'), { targetType, targetId, reason });
+      if (recent && !confirmDuplicate) {
+        const mins = Math.max(0, Math.round((Date.now() - (recent.createdAt?.seconds || 0) * 1000) / 60000));
+        throw httpError(409, `A mesma infração (mesmo alvo e motivo) já foi registrada há ${mins} min. Registrar mesmo assim?`, 'DUPLICATE_RECENT');
+      }
+      return { ...store.insert('disciplinaryActions', {
+        targetType, targetId, targetName: target.name, reason: String(reason).trim(), points: DISCIPLINE_POINTS, origin: 'local',
+        ...(clientId ? { clientId } : {}),
+        createdAt: { __serverTimestamp: true }, createdBy: req.user.username || 'admin', createdByName: req.user.name || 'Administrador'
+      }, id), result: 'created' };
+    });
+    res.json(out);
   });
 
   r.delete('/discipline/:id', requireAuth(ADMIN_ROLES), (req, res) => {

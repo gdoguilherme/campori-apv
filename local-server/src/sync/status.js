@@ -1,13 +1,14 @@
 // Resumo do estado da sincronização para o painel /status (e para o /health): semáforos, pendências,
 // erros recentes e o estado por unidade e por requisito.
 import { COLLECTIONS } from '../db.js';
+import { cachedDirStats, fmtBytes, collectionCounts, diskFree, lastBackup } from '../ops.js';
 
 const CLOUD_LABEL = {
   online: ['green', 'Nuvem disponível'], offline: ['red', 'Nuvem fora do ar (sem internet?)'], error: ['red', 'Nuvem recusou o acesso'],
   disabled: ['gray', 'Sincronização desligada'], demo: ['gray', 'Banco de demonstração'], unconfigured: ['gray', 'Nuvem não configurada'], unknown: ['gray', 'Verificando a nuvem…'],
 };
 
-export function buildSummary({ store, config, engine, startedAt, now = engine?.now?.() ?? Date.now() }) {
+export function buildSummary({ store, config, engine, startedAt, tls = null, now = engine?.now?.() ?? Date.now() }) {
   const st = engine ? engine.status() : { enabled: false, cloud: { state: 'disabled', message: 'Sincronização desligada (CLOUD_SYNC=1 no .env liga).' }, push: { pending: store.dirtyCounts(), lastSuccessAt: null } };
   const pendingTotal = st.push.pending.total;
 
@@ -65,6 +66,21 @@ export function buildSummary({ store, config, engine, startedAt, now = engine?.n
       enabled: st.enabled, running: !!st.push.running, pending: pendingTotal, pendingOther: other, byCollection: st.push.pending.byCollection,
       lastSuccessAt: st.push.lastSuccessAt, lastAttemptAt: st.push.lastAttemptAt, nextAttemptAt: st.push.nextAttemptAt, lastResult: st.push.lastResult,
     },
+    uploads: (() => {
+      const u = cachedDirStats(config.uploadDir);
+      return { count: u.count, bytes: u.bytes, size: fmtBytes(u.bytes), dir: config.uploadDir, warning: 'As fotos ficam só neste PC — copie ao fim do dia (npm run backup-uploads).' };
+    })(),
+    ops: (() => {
+      const d = config.uploadDir ? diskFree(config.uploadDir) : null;
+      const b = config.backupDir ? lastBackup(config.backupDir) : null;
+      const t = tls || null;
+      return {
+        counts: collectionCounts(store),
+        disk: d ? { freeBytes: d.freeBytes, totalBytes: d.totalBytes, free: fmtBytes(d.freeBytes), low: d.freeBytes < 2 * 1024 ** 3 } : null,
+        cert: t ? { enabled: !!t.enabled, daysLeft: t.daysLeft ?? null, validTo: t.validTo ?? null, error: t.error ?? null } : null,
+        backup: b ? { lastAt: b.at, count: b.count, file: b.file } : null,
+      };
+    })(),
     errors: { failing: failing.slice(0, 20), events: errorEvents.map(e => ({ ts: e.ts, message: e.message })) },
     alerts: store.listEvents({ alertsOnly: true, unackedOnly: true, limit: 30 }).map(e => ({ id: e.id, ts: e.ts, kind: e.kind, level: e.level, message: e.message })),
     units: Object.values(unitInfo).map(withState).sort((a, b) => a.name.localeCompare(b.name, 'pt')),

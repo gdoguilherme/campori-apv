@@ -23,6 +23,7 @@ cenários aleatórios.
 | `src/db.js` | Schema SQLite: 1 tabela por coleção do Firestore (`regions, units, participants, requirements, submissions, disciplinaryActions, auditLog, users`), doc completo em JSON + colunas indexadas + `updatedAt/deleted/dirty` (prontos p/ sincronização) |
 | `src/app.js`, `src/routes/*` | API HTTP |
 | `src/server.js` | Processo do servidor |
+| `src/preflight.js`, `src/reset-events.js`, `src/ops.js`, `scripts/*.js` | `npm run preflight`, `npm run resetar-eventos-de-teste`, `npm run backup-uploads`, painel `/status` ampliado — ver [GUIA-WINDOWS.md](GUIA-WINDOWS.md) (Parte 3) |
 | `src/dbtool.js`, `scripts/dbtool.js` | Ferramenta de último caso `npm run dbtool` (listar/ver/alterar/apagar com backup, `dirty=1` e índices coerentes) — ver [DBTOOL.md](DBTOOL.md) |
 | `src/sync/` | Sincronização com o Firebase em segundo plano: `engine.js` (laço, backoff, estado), `push.js` (envio por tipo de dado), `convert.js` (merge de 3 vias), `cloud.js` (firebase-admin), `status.js` (resumo do painel) — ver [OFFLINE.md](../OFFLINE.md) |
 | `src/routes/status*` | Painel de status `http://localhost:8787/status` (PIN fora do PC) |

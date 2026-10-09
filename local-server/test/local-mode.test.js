@@ -36,6 +36,7 @@ before(async () => {
   globalThis.location = { hostname: u.hostname, port: u.port, origin: t.base, href: t.base + '/' };
   globalThis.document = { hidden: false, body: { appendChild() {} }, createElement: () => ({ style: {}, remove() {} }), addEventListener() {}, removeEventListener() {} };
   globalThis.__CAMPORI_POLL_MS = 80;
+  globalThis.__CAMPORI_LOCAL_APP = 1;   // como o servidor injeta nas páginas
   fetched = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = (url, ...rest) => { fetched.push(String(url)); return realFetch(url, ...rest); };
@@ -217,7 +218,11 @@ test('perfil da região: só nome de guerra/logo/info da PRÓPRIA região', asyn
 test('upload grava no servidor local e devolve a URL local', async () => {
   await loginAs('regiao1');
   const url = await api.uploadFile(new File([new Uint8Array([1, 2, 3])], 'foto.png', { type: 'image/png' }), 'R1', 'RA');
-  assert.ok(url.startsWith(t.base + '/files/R1/') || /\/files\/R1\//.test(url), url);
+  assert.match(url, /^\/files\/R1\//, 'URL relativa: vale por domínio ou IP');
+  const html = api.proofBlock(url);   // modo local: a foto abre no endereço em que a pessoa está
+  assert.ok(html.includes(`src="${t.base}${url}"`), html);
+  assert.equal((await fetch(t.base + url)).status, 200);
+  assert.ok(api.proofBlock('http://192.168.9.9:8787' + url).includes(`src="${t.base}${url}"`), 'URL antiga de outro IP também é reescrita');
 });
 
 test('ranking público sem login', async () => {

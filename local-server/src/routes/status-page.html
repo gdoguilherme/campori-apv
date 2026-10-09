@@ -79,6 +79,22 @@
     <div class="msg" id="syncMsg" style="margin-top:14px"></div>
   </section>
 
+  <section class="card" id="opsCard">
+    <h3>🖥️ Operação do PC</h3>
+    <div class="nums" id="opsNums"></div>
+    <div class="toolbar" style="margin-top:14px">
+      <button id="btnBackup" class="alt">💾 Baixar backup agora</button>
+      <span class="small" id="backupInfo"></span>
+    </div>
+    <div class="msg" id="backupMsg" style="margin-top:12px"></div>
+  </section>
+
+  <section class="card" id="uploadsCard">
+    <h3>📷 Fotos / comprovações</h3>
+    <div><b id="upCount">0</b> arquivo(s) · <b id="upSize">0 B</b> em <span class="small" id="upDir"></span></div>
+    <div class="msg warn" id="upWarn" style="margin-top:10px"></div>
+  </section>
+
   <section class="card alert" id="alertsCard" style="display:none">
     <h3>⚠️ Pontos que já estavam cadastrados</h3>
     <ul id="alertsList"></ul>
@@ -131,6 +147,17 @@
     $('btnSync').disabled = !!s.running; $('btnPull').disabled = !!s.running; $('btnSync').textContent = s.running ? '⏳ Sincronizando…' : '🔄 Sincronizar agora';
     $('syncHint').textContent = s.enabled ? (s.nextAttemptAt && s.nextAttemptAt > nowS() ? 'Nova tentativa automática em ' + Math.max(1, Math.round((s.nextAttemptAt - nowS()) / 1000)) + ' s.' : 'Envia o que está pendente e traz as novidades da nuvem.') : 'A sincronização está desligada neste servidor.';
 
+    if (d.ops) {
+      var o = d.ops, c = o.counts, nums = [
+        ['Regiões', c.regions], ['Unidades', c.units], ['Participantes', c.participants], ['Requisitos', c.requirements], ['Usuários', c.users],
+        ['Submissões', c.submissions.total + ' (' + c.submissions.pending + ' pend. · ' + c.submissions.approved + ' aprov.)'],
+        ['Espaço livre no disco', o.disk ? o.disk.free + (o.disk.low ? ' ⚠️ pouco!' : '') : '—'],
+        ['Certificado HTTPS', o.cert ? (o.cert.enabled ? (o.cert.daysLeft + ' dia(s)' + (o.cert.daysLeft < 15 ? ' ⚠️' : '')) : 'desligado') : '—']
+      ];
+      $('opsNums').innerHTML = nums.map(function (n) { return '<div class="num"><b style="font-size:1.35rem">' + esc(n[1]) + '</b><span>' + esc(n[0]) + '</span></div>'; }).join('');
+      $('backupInfo').textContent = o.backup ? 'Último backup automático: ' + ago(o.backup.lastAt) + ' (' + o.backup.count + ' guardados em backups/)' : 'Ainda não há backup em backups/';
+    }
+    if (d.uploads) { $('upCount').textContent = d.uploads.count; $('upSize').textContent = d.uploads.size; $('upDir').textContent = d.uploads.dir; $('upWarn').className = 'msg warn'; $('upWarn').textContent = '⚠️ ' + d.uploads.warning; }
     $('alertsCard').style.display = d.alerts.length ? 'block' : 'none';
     $('alertsList').innerHTML = d.alerts.map(function (a) { return '<li>' + esc(a.message) + ' <span class="small">(' + fmt(a.ts) + ')</span></li>'; }).join('');
     var errs = d.errors.failing.map(function (f) { return esc(f.collection + '/' + f.id + ': ' + f.message) + ' (tentativas: ' + f.attempts + ')'; }).concat(d.errors.events.map(function (e) { return fmt(e.ts) + ' — ' + esc(e.message); }));
@@ -164,6 +191,15 @@
   }
   $('btnSync').onclick = function () { runSync('sync-now', $('btnSync'), '⏳ Sincronizando…', '🔄 Sincronizar agora'); };
   $('btnPull').onclick = function () { runSync('pull-now', $('btnPull'), '⏳ Atualizando…', '⬇️ Atualizar dados da nuvem'); };
+  $('btnBackup').onclick = function () {
+    var box = $('backupMsg'), btn = $('btnBackup'); btn.disabled = true; btn.textContent = '⏳ Gerando…'; box.className = 'msg';
+    fetch('/status/api/backup', { headers: { 'X-Status-Pin': pin } }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var name = (/filename="?([^";]+)"?/.exec(r.headers.get('Content-Disposition') || '') || [])[1] || 'campori-backup.db';
+      return r.blob().then(function (b) { var a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; document.body.appendChild(a); a.click(); a.remove(); box.className = 'msg ok'; box.textContent = '✅ Backup gerado e baixado: ' + name + ' (cópia também em backups/).'; });
+    }).catch(function (e) { box.className = 'msg err'; box.textContent = '❌ Não foi possível gerar o backup: ' + e.message; })
+      .then(function () { btn.disabled = false; btn.textContent = '💾 Baixar backup agora'; load(); });
+  };
   $('btnAck').onclick = function () { api('ack', { method: 'POST', body: '{}' }).then(load); };
   $('pinOk').onclick = function () { pin = $('pinInput').value; try { sessionStorage.setItem('statusPin', pin); } catch (e) {} load(); };
   $('pinInput').onkeydown = function (e) { if (e.key === 'Enter') $('pinOk').click(); };

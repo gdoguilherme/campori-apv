@@ -1,9 +1,11 @@
 import {
-  db, collection, doc, addDoc, updateDoc, deleteDoc, getDocs,
+  db, collection, doc, addDoc, updateDoc, deleteDoc, setDoc, getDocs,
   query, where, orderBy, onSnapshot, serverTimestamp
 } from './firebase.js';
-import { CLOUD_URL, TIMEOUTS } from './config.js';
+import { CLOUD_URL, TIMEOUTS, LOCAL_APP } from './config.js';
+import { resolveProof } from '../shared/proof.js';
 import { fetchJson, serverFetch, HttpError, NetError } from './net.js';
+import { normalizeUniformInspection, computeUniformPoints } from '../shared/uniforme.js';
 import { reqFilledBy, computeUnitScores, computeStars, findQrDuplicate, DISCIPLINE_POINTS } from '../shared/scoring.js';
 
 // Regras de pontuação vivem em shared/scoring.js (também usado pelo servidor local offline)
@@ -97,7 +99,12 @@ export function genPassword(len = 8) {
   return Array.from({ length: len }, () => c[Math.floor(Math.random() * c.length)]).join('');
 }
 
-export function proofBlock(url, context = 'queue') {
+export function proofBlock(rawUrl, context = 'queue') {
+  const proof = resolveProof(rawUrl, { isLocalApp: LOCAL_APP, origin: typeof location !== 'undefined' ? location.origin : '' });
+  if (proof.kind === 'pc-only') return `<div style="height:64px;background:#fffbeb;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;color:#92400e;font-size:.82rem;font-weight:600;text-align:center;padding:.25rem;">
+    📍 Foto disponível apenas no PC do evento<span style="font-weight:400;font-size:.7rem;">arquivo: ${String(proof.name || '').replace(/[<>&"]/g, '')}</span></div>`;
+  const url = proof.kind === 'none' ? null : proof.src;
   if (!url) return `<div style="height:52px;background:#f8fafc;display:flex;align-items:center;
     justify-content:center;color:#94a3b8;font-size:.82rem;">Sem arquivo anexado</div>`;
   const isPdf = url.toLowerCase().includes('.pdf') || url.includes('/file/d/');
@@ -119,6 +126,9 @@ export function proofBlock(url, context = 'queue') {
     </div>
   </div>`;
 }
+
+// Paridade com a versão do modo local: na nuvem o Firestore já atualiza em tempo real
+export async function refreshNow() {}
 
 // ── SUBSCRIPTIONS ─────────────────────────────────────────────
 
@@ -292,6 +302,31 @@ export async function doFiscalSuggestion(req, regionId, totalPts, subItemScores,
     });
   }
   toast(`✅ ${req.name} — ${totalPts} pts (aguardando aprovação)`);
+}
+
+// Inspeção de uniforme (nuvem): mesma regra única de shared/uniforme.js; fica PENDENTE para o admin aprovar.
+// Reavaliar a mesma unidade atualiza a submission existente (a mais recente vale, sem duplicar pontos).
+export async function doUniformInspection(req, unit, inspection, currentUser, existingSubId = null) {
+  const norm = normalizeUniformInspection(inspection);
+  const pts = computeUniformPoints(norm.erros, req).pontos;
+  const baseData = {
+    requirementPoints: pts, subItemScores: null, subItemPcts: null, status: 'pending', fiscalSuggestion: true,
+    notes: `Avaliado por: ${currentUser.name}`, submittedAt: serverTimestamp(),
+    submittedBy: currentUser.username, submittedByName: currentUser.name,
+    uniformInspection: { ...norm, avaliadorId: currentUser.id, avaliadorNome: currentUser.name, avaliadoEm: Date.now() }
+  };
+  if (existingSubId) {
+    await updateDoc(doc(db, 'submissions', existingSubId), baseData);
+  } else {
+    await addDoc(collection(db, 'submissions'), {
+      regionId: unit.regionId, regionName: rname(unit.regionId), unitId: unit.id,
+      requirementId: req.id, requirementName: req.name, requirementCategory: req.category,
+      competitionCategory: req.competitionCategory || 'Ambos', proofUrl: null, source: 'judge',
+      requirementDeadlineSnapshot: req.deadline || null, ...baseData
+    });
+  }
+  toast(`✅ ${req.name} — ${pts} pts (aguardando aprovação)`);
+  return { points: pts };
 }
 
 // ── REQUIREMENTS ──────────────────────────────────────────────
@@ -522,10 +557,13 @@ export function subDisciplinaryActions(onUpdate) {
   );
 }
 
+// Idempotente: o id do documento vem do `clientId` do formulário (`disc_<clientId>`), o MESMO que o servidor local usa →
+// reenvio e sincronização local↔nuvem não duplicam o desconto. `origin` marca onde foi lançada (ver dedupeDisciplinaryActions).
 export async function createDisciplinaryAction(data, currentUser) {
-  await addDoc(collection(db, 'disciplinaryActions'), {
+  const clientId = data.clientId || (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `c${Date.now()}${Math.random().toString(36).slice(2, 10)}`);
+  await setDoc(doc(db, 'disciplinaryActions', `disc_${clientId}`), {
     targetType: data.targetType, targetId: data.targetId, targetName: data.targetName,
-    reason: data.reason, points: DISCIPLINE_POINTS,
+    reason: data.reason, points: DISCIPLINE_POINTS, origin: 'cloud', clientId,
     createdAt: serverTimestamp(), createdBy: currentUser?.username || 'admin', createdByName: currentUser?.name || 'Administrador'
   });
 }

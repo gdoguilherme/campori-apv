@@ -5,7 +5,7 @@ import { decideScanItem, orderBatch, buildCounselorBootstrap, scanDocId, SCAN_BA
 
 // Sincronização do app do Conselheiro (fila offline). Mesmo contrato do backend da nuvem
 // (server/routes/sync.js) — a decisão de cada item vive em shared/sync.js.
-export function syncRouter({ store, auth }) {
+export function syncRouter({ store, auth, engine = null, config = {} }) {
   const r = express.Router();
   const { requireAuth, verifyQr } = auth;
   const makeTs = ms => ({ seconds: Math.floor(ms / 1000), nanoseconds: (ms % 1000) * 1e6 });
@@ -63,5 +63,22 @@ export function syncRouter({ store, auth }) {
       nowMs: Date.now(),
     }));
   });
+
+  // ── Estado e "Sincronizar agora" para a barra de TODOS os portais (qualquer perfil logado) ──
+  // state: o servidor local está no ar + quantos itens aguardam envio à nuvem. cloud-now: manda o motor de sincronização agir já.
+  r.get('/state', requireAuth(), (_req, res) => {
+    const st = engine?.status?.();
+    res.set('Cache-Control', 'no-store').json({
+      serverTime: Date.now(), revision: store.revision(), version: config.version ?? null,
+      cloud: { enabled: !!st?.enabled, state: st?.cloud?.state || 'disabled', lastSuccessAt: st?.push?.lastSuccessAt ?? null },
+      // sem sincronização ligada (modo só-PC / demo) nada vai sair para a nuvem: não é pendência
+      pendingCloud: st?.enabled ? store.dirtyCounts().total : 0,
+    });
+  });
+  r.post('/cloud-now', requireAuth(), wrap(async (_req, res) => {
+    if (!engine) return res.json({ ok: false, disabled: true, message: 'A sincronização com a nuvem está desligada neste servidor.', pendingCloud: 0 });
+    const result = await engine.syncNow({ manual: true });
+    res.json({ ok: !!result?.ok, offline: !!result?.offline, message: result?.message || '', pendingCloud: store.dirtyCounts().total });
+  }));
   return r;
 }

@@ -29,12 +29,12 @@ export async function listFiscalQueue(userId) {
   return all.filter(k => typeof k.key === 'string' && k.key.startsWith(PREFIX) && k.userId === userId).sort((a, b) => b.evaluatedAt - a.evaluatedAt);
 }
 
-export async function enqueueFiscal({ user, req, regionId, unitId = null, points, subItemScores = null, subItemPcts = null, existingSubId = null, scopeLabel = '', evaluatedAt = Date.now() }) {
+export async function enqueueFiscal({ user, req, regionId, unitId = null, points, subItemScores = null, subItemPcts = null, existingSubId = null, scopeLabel = '', evaluatedAt = Date.now(), uniformInspection = null }) {
   const id = uuid();
   const item = {
     key: `${PREFIX}${user.id}:${id}`, id, userId: user.id,
     requirementId: req.id, requirementName: req.name || '', regionId, unitId: unitId || null, scopeLabel,
-    points, subItemScores, subItemPcts, existingSubId: existingSubId || null,
+    points, subItemScores, subItemPcts, existingSubId: existingSubId || null, uniformInspection,
     evaluatedAt, createdAt: Date.now(),
     status: FQ_STATUS.PENDENTE, message: '', attempts: 0
   };
@@ -60,7 +60,8 @@ export async function discardFiscalItem(item) {
 
 const toWire = q => ({
   clientId: q.id, evaluatedAt: q.evaluatedAt, requirementId: q.requirementId, regionId: q.regionId, unitId: q.unitId,
-  points: q.points, subItemScores: q.subItemScores, subItemPcts: q.subItemPcts, existingSubId: q.existingSubId
+  points: q.points, subItemScores: q.subItemScores, subItemPcts: q.subItemPcts, existingSubId: q.existingSubId,
+  ...(q.uniformInspection ? { uniformInspection: q.uniformInspection } : {})   // uniforme: o servidor recalcula os pontos pela regra única
 });
 
 function scheduleBackoff() {

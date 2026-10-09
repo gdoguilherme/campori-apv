@@ -115,6 +115,9 @@ function listen(fetchDocs, project, onUpdate, label) {
   return () => { stopped = true; subs.delete(sub); stopTimerIfIdle(); };
 }
 
+// "Sincronizar agora" dos portais sem fila própria (admin/região): rebaixa tudo já, sem esperar o próximo ciclo
+export async function refreshNow() { await Promise.all([...subs].map(x => x.refresh())); }
+
 const listDocs = (col, filters) => async () => (await apiFetch(dataPath(col, filters))).docs;
 const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 const byOrder = (a, b) => (a.order ?? 1e9) - (b.order ?? 1e9);
@@ -173,6 +176,15 @@ export async function doFiscalSuggestion(req, regionId, totalPts, subItemScores,
     }
   });
   toast(`✅ ${req.name} — ${totalPts} pts (aguardando aprovação)`);
+}
+
+export async function doUniformInspection(req, unit, inspection, currentUser, existingSubId = null) {
+  const sub = await apiFetch('/submissions/fiscal-suggestion', {
+    method: 'POST',
+    body: { requirementId: req.id, unitId: unit.id, regionId: unit.regionId, uniformInspection: inspection, existingSubId: existingSubId || null }
+  });
+  toast(`✅ ${req.name} — ${sub.requirementPoints} pts (aguardando aprovação)`);
+  return { points: sub.requirementPoints };
 }
 
 export async function deleteSubmission(id) {
@@ -300,6 +312,11 @@ export async function fetchPublicRanking() {
 }
 
 export async function createDisciplinaryAction(data, currentUser) {
-  await apiFetch('/discipline', { method: 'POST', body: { targetType: data.targetType, targetId: data.targetId, reason: data.reason } });
+  try {
+    await apiFetch('/discipline', { method: 'POST', body: { targetType: data.targetType, targetId: data.targetId, reason: data.reason, clientId: data.clientId || null, confirmDuplicate: !!data.confirmDuplicate } });
+  } catch (e) {
+    if (e instanceof HttpError && e.code === 'DUPLICATE_RECENT') { const err = new Error(e.message); err.code = 'DUPLICATE_RECENT'; throw err; }
+    throw e;
+  }
 }
 export const deleteDisciplinaryAction = id => apiFetch(`/discipline/${encodeURIComponent(id)}`, { method: 'DELETE' });

@@ -30,6 +30,8 @@ import { guardLogin, saveSession, portalUrlForUser } from '../js/auth.js';
 import { loginUser, ensureInitialAdmin, toast, fetchPublicRanking, renderAnonRanking } from '../js/api.js';
 import { withTimeout } from '../js/net.js';
 import { loadAnonRanking, rankingStampHtml } from '../js/ranking.js';
+import { mountPortalBar } from '../js/portalBar.js';
+mountPortalBar({ showSync: false });   // só versão/atualizar app e estado do servidor (ainda sem login)
 
 const app = document.getElementById('app');
 let loading = false;

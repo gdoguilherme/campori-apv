@@ -65,7 +65,11 @@ export function createApp({ store, config, log, tls = () => null, engine = null,
   app.use('/sync', syncRouter(ctx));
   app.use('/status', statusRouter({ store, config, engine, startedAt, isLocalRequest }));   // painel de status do PC
   app.use('/', businessRouter(ctx));
-  app.use('/files', express.static(config.uploadDir, { fallthrough: true }));
+  // upload sem login (igual à nuvem): sem "adivinhar" tipo, e documentos ativos (html/svg/xml) não executam nada
+  app.use('/files', express.static(config.uploadDir, { fallthrough: true, setHeaders: (res, file) => {
+    res.set('X-Content-Type-Options', 'nosniff');
+    if (/\.(html?|svg|xml|xhtml)$/i.test(file)) res.set('Content-Security-Policy', "sandbox; default-src 'none'");
+  } }));
 
   // Frontend estático (opcional) — SÓ as pastas públicas; nunca a raiz (tem credenciais em server/)
   if (config.frontendDir && fs.existsSync(path.join(config.frontendDir, 'pages'))) {

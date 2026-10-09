@@ -2,7 +2,8 @@ import {
   db, collection, doc, addDoc, updateDoc, deleteDoc, getDocs,
   query, where, orderBy, onSnapshot, serverTimestamp
 } from './firebase.js';
-import { CLOUD_URL, TIMEOUTS } from './config.js';
+import { CLOUD_URL, TIMEOUTS, LOCAL_APP } from './config.js';
+import { resolveProof } from '../shared/proof.js';
 import { fetchJson, serverFetch, HttpError, NetError } from './net.js';
 import { normalizeUniformInspection, computeUniformPoints } from '../shared/uniforme.js';
 import { reqFilledBy, computeUnitScores, computeStars, findQrDuplicate, DISCIPLINE_POINTS } from '../shared/scoring.js';
@@ -98,7 +99,12 @@ export function genPassword(len = 8) {
   return Array.from({ length: len }, () => c[Math.floor(Math.random() * c.length)]).join('');
 }
 
-export function proofBlock(url, context = 'queue') {
+export function proofBlock(rawUrl, context = 'queue') {
+  const proof = resolveProof(rawUrl, { isLocalApp: LOCAL_APP, origin: typeof location !== 'undefined' ? location.origin : '' });
+  if (proof.kind === 'pc-only') return `<div style="height:64px;background:#fffbeb;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;color:#92400e;font-size:.82rem;font-weight:600;text-align:center;padding:.25rem;">
+    📍 Foto disponível apenas no PC do evento<span style="font-weight:400;font-size:.7rem;">arquivo: ${String(proof.name || '').replace(/[<>&"]/g, '')}</span></div>`;
+  const url = proof.kind === 'none' ? null : proof.src;
   if (!url) return `<div style="height:52px;background:#f8fafc;display:flex;align-items:center;
     justify-content:center;color:#94a3b8;font-size:.82rem;">Sem arquivo anexado</div>`;
   const isPdf = url.toLowerCase().includes('.pdf') || url.includes('/file/d/');

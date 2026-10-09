@@ -12,6 +12,7 @@
     "seed-demo": "node scripts/seed-demo.js",
     "pull-cloud": "node scripts/pull-from-firestore.js",
     "dbtool": "node scripts/dbtool.js",
+    "backup-uploads": "node scripts/backup-uploads.js",
     "test": "node --test \"test/*.test.js\""
   },
   "engines": {

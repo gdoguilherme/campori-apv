@@ -23,7 +23,8 @@ export function uploadRouter({ config }) {
     const ext = path.extname(req.file.originalname || '').toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 8);
     const name = `${safe(req.body?.reqCode)}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}${ext}`;
     await fs.promises.writeFile(path.join(dir, name), req.file.buffer);
-    res.json({ url: `${req.protocol}://${req.get('host')}/files/${safe(req.body?.regionId)}/${name}`, name });
+    // URL RELATIVA: vale em qualquer endereço do servidor (domínio ou IP) e, sincronizada, a nuvem sabe que é um arquivo só do PC
+    res.json({ url: `/files/${safe(req.body?.regionId)}/${name}`, name });
   }));
   return r;
 }

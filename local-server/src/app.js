@@ -63,7 +63,7 @@ export function createApp({ store, config, log, tls = () => null, engine = null,
   app.use('/upload', uploadRouter(ctx));
   app.use('/data', dataRouter(ctx));
   app.use('/sync', syncRouter({ ...ctx, engine }));
-  app.use('/status', statusRouter({ store, config, engine, startedAt, isLocalRequest }));   // painel de status do PC
+  app.use('/status', statusRouter({ store, config, engine, startedAt, isLocalRequest, tls }));   // painel de status do PC
   app.use('/', businessRouter(ctx));
   // upload sem login (igual à nuvem): sem "adivinhar" tipo, e documentos ativos (html/svg/xml) não executam nada
   app.use('/files', express.static(config.uploadDir, { fallthrough: true, setHeaders: (res, file) => {

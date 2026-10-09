@@ -3,10 +3,13 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { buildSummary } from '../sync/status.js';
 import { statusPageHtml } from './status-page.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { stamp } from '../ops.js';
 
 // Painel de status do PC (pessoas não técnicas). A página em si é pública (não contém dados);
 // os DADOS (/status/api/*) só saem no próprio PC ou com o PIN (STATUS_PIN no .env).
-export function statusRouter({ store, config, engine, startedAt, isLocalRequest }) {
+export function statusRouter({ store, config, engine, startedAt, isLocalRequest, tls = () => null }) {
   const r = express.Router();
 
   // "No próprio PC" = conexão vinda do loopback OU de um IP da própria máquina (ex: acessou por https://local.gdtmidia.com.br)
@@ -33,7 +36,7 @@ export function statusRouter({ store, config, engine, startedAt, isLocalRequest 
   }
 
   r.get('/', (_req, res) => { res.set('Cache-Control', 'no-store'); res.type('html').send(statusPageHtml()); });
-  r.get('/api/summary', guard, (_req, res) => res.json(buildSummary({ store, config, engine, startedAt })));
+  r.get('/api/summary', guard, (_req, res) => res.json(buildSummary({ store, config, engine, startedAt, tls: tls() })));
   r.post('/api/ping', guard, (_req, res) => res.json({ ok: true, local: isLocal(_req) }));   // o PIN digitado está certo?
   r.post('/api/ack', guard, (_req, res) => res.json({ ok: true, acknowledged: store.ackAlerts() }));
 
@@ -42,7 +45,7 @@ export function statusRouter({ store, config, engine, startedAt, isLocalRequest 
     try {
       if (!engine) return res.json({ ok: false, message: 'Sincronização indisponível neste servidor.' });
       const result = await engine.syncNow({ manual: true });
-      res.json({ ...result, summary: buildSummary({ store, config, engine, startedAt }) });
+      res.json({ ...result, summary: buildSummary({ store, config, engine, startedAt, tls: tls() }) });
     } catch (e) { next(e); }
   });
 
@@ -51,7 +54,19 @@ export function statusRouter({ store, config, engine, startedAt, isLocalRequest 
     try {
       if (!engine) return res.json({ ok: false, message: 'Sincronização indisponível neste servidor.' });
       const result = await engine.pullNow();
-      res.json({ ...result, summary: buildSummary({ store, config, engine, startedAt }) });
+      res.json({ ...result, summary: buildSummary({ store, config, engine, startedAt, tls: tls() }) });
+    } catch (e) { next(e); }
+  });
+
+  // "Baixar backup agora": gera um backup consistente do banco (VACUUM INTO), guarda em backups/ e entrega o arquivo.
+  r.get('/api/backup', guard, (_req, res, next) => {
+    try {
+      fs.mkdirSync(config.backupDir, { recursive: true });
+      const name = `campori-${stamp()}-manual.db`;
+      const file = path.join(config.backupDir, name);
+      store.backupTo(file);
+      res.set('Cache-Control', 'no-store');
+      res.download(file, name, err => { if (err && !res.headersSent) next(err); });
     } catch (e) { next(e); }
   });
   return r;

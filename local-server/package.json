@@ -13,6 +13,8 @@
     "pull-cloud": "node scripts/pull-from-firestore.js",
     "dbtool": "node scripts/dbtool.js",
     "backup-uploads": "node scripts/backup-uploads.js",
+    "preflight": "node scripts/preflight.js",
+    "resetar-eventos-de-teste": "node scripts/resetar-eventos-de-teste.js",
     "test": "node --test \"test/*.test.js\""
   },
   "engines": {

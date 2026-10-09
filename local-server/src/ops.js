@@ -58,3 +58,25 @@ export function diskFree(dir) {
 }
 
 export const fmtBytes = n => (n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} GB` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`);
+
+// ── Resumo do banco para o painel /status ─────────────────────────────────────────────────
+export function collectionCounts(store) {
+  const subs = store.list('submissions');
+  const by = s => subs.filter(x => x.status === s).length;
+  return {
+    regions: store.count('regions'), units: store.count('units'), participants: store.count('participants'),
+    requirements: store.count('requirements'), users: store.count('users'),
+    submissions: { total: subs.length, pending: by('pending'), approved: by('approved'), rejected: by('rejected') },
+    disciplinaryActions: store.count('disciplinaryActions'),
+  };
+}
+
+// Backup mais recente (qualquer campori-*.db em backups/) — o servidor faz um a cada BACKUP_EVERY_MIN
+export function lastBackup(backupDir) {
+  try {
+    const files = fs.readdirSync(backupDir).filter(f => /^campori-.*\.db$/.test(f));
+    let best = null;
+    for (const f of files) { const m = fs.statSync(path.join(backupDir, f)).mtimeMs; if (!best || m > best.at) best = { file: f, at: m }; }
+    return best ? { ...best, count: files.length } : null;
+  } catch { return null; }
+}

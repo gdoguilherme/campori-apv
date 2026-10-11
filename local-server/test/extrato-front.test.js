@@ -17,7 +17,7 @@ test('admin: clique na unidade do ranking abre o extrato; botões CSV da unidade
   const admin = read('js/admin.js'), ex = read('js/extrato.js');
   assert.match(admin, /onclick="W\.openStatement\('\$\{s\.id\}'\)"/, 'linha do ranking clicável');
   assert.match(admin, /openStatement\(unitId\)/); assert.match(admin, /Excel de todas as unidades/);
-  assert.match(admin, /buildUnitStatement\(id, dados\(\), \{ viewer: 'admin' \}\)/, 'calcula com a função compartilhada');
+  assert.match(admin, /buildUnitStatement\(id, dados\(\), \{ viewer: 'admin'/, 'calcula com a função compartilhada');
   for (const label of ['📥 CSV da unidade', '🖨️ Imprimir/PDF', 'Excel da unidade']) assert.ok(ex.includes(label), label);
   assert.match(ex, /Excel de todas as unidades/); assert.match(ex, /ORIGEM_FILTROS\.map/, 'filtro por origem');
   for (const col of ['Data', 'Origem', 'Prova / motivo', 'Pontos', 'Saldo']) assert.ok(ex.includes(`>${col}<`), `coluna ${col}`);

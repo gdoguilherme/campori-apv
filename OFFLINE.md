@@ -334,3 +334,8 @@ conta **uma vez** (ranking, bootstrap e portal iguais; `dedupeDisciplinaryAction
 - **Telas:** admin → Ranking → clique na unidade (tabela com filtro por origem, subtotais; 📥 CSV da unidade, 📥 Excel de todas as unidades — aba *Resumo* + uma por unidade —, 🖨️ Imprimir/PDF);
   região e conselheiro → **📄 Extrato** (região: lista das unidades da região + "Excel da região"; conselheiro: a própria unidade, também **offline** com o snapshot do celular).
 - **Nuvem:** `api.js` calcula no navegador (o Firestore do app não tem login, então o escopo é aplicado no cliente); o servidor local aplica no servidor.
+
+### Excel do admin: requisitos sem pontuação
+Só no Excel do **admin** (Histórico → 📊 Excel, e Ranking → Excel de todas as unidades): lista, por unidade, os requisitos ativos que se aplicam a ela e em que **não pontuou** —
+*Não preenchido*, *Aguardando aprovação*, *Rejeitado* ou *Aprovado com 0 pts*. Histórico: aba **Sem pontuação**; Extrato: seção no fim de cada aba da unidade + coluna no Resumo.
+Informativo (não entra em totais), e `?naoPontuados=1` só é honrado para admin — região e conselheiro nunca recebem.

@@ -15,6 +15,8 @@ import {
 } from './api.js';
 import { loadIdentifiedRanking, rankingStampHtml } from './ranking.js';
 import { mountPortalBar } from './portalBar.js';
+import { openExtrato } from './extrato.js';
+import { buildUnitStatement, buildStatements } from '../shared/extrato.js';
 import { QUESTION_TYPES, TYPE_LABEL, PROFILES, PROFILE_LABEL, summarize, filterResponses, buildSurveyCsv } from '../shared/survey.js';
 import { UNIFORM_CATEGORIES, buildUniformCsv, computeUniformPoints } from '../shared/uniforme.js';
 import { dedupeDisciplinaryActions, findRecentSameInfraction, DISCIPLINE_DUP_WINDOW_MS } from '../shared/scoring.js';
@@ -703,7 +705,8 @@ function tRanking() {
       ${scores.length === 0
         ? `<div style="text-align:center;padding:3rem;color:#94a3b8;"><p>Nenhuma pontuação ainda</p></div>`
         : scores.map((s, i) => `
-        <div style="display:flex;align-items:center;gap:.875rem;padding:.875rem;border-radius:.875rem;
+        <div onclick="W.openStatement('${s.id}')" title="Ver o extrato de pontos desta unidade" role="button" tabindex="0" onkeydown="if(event.key==='Enter')W.openStatement('${s.id}')"
+          style="display:flex;align-items:center;gap:.875rem;padding:.875rem;border-radius:.875rem;cursor:pointer;
           background:${i < 3 && s.total > 0 ? '#f0fdf4' : '#f8fafc'};">
           <div style="width:2rem;text-align:center;font-weight:800;font-size:.9rem;flex-shrink:0;
             color:${i === 0 && s.total > 0 ? '#D4A017' : i === 1 && s.total > 0 ? '#6b7280' : i === 2 && s.total > 0 ? '#92400e' : '#94a3b8'};">
@@ -727,7 +730,8 @@ function tRanking() {
           </div>
         </div>`).join('')}
     </div>
-    <p style="text-align:center;font-size:.75rem;color:#94a3b8;margin-top:1rem;">Atualizado em tempo real</p>
+    <p style="text-align:center;font-size:.75rem;color:#94a3b8;margin-top:1rem;">Atualizado em tempo real · toque numa unidade para ver o 📄 extrato de pontos</p>
+    <div style="text-align:center;margin-top:.5rem;"><button onclick="W.openStatement(null)" style="background:#166534;color:#fff;border:none;padding:.55rem 1rem;border-radius:.75rem;font-size:.82rem;font-weight:700;cursor:pointer;">📥 Excel de todas as unidades</button></div>
   </div>`;
 }
 
@@ -1591,6 +1595,17 @@ window.W = {
   openPhoto(url)   { S.photoUrl = url; S.modal = 'photo'; render(); },
   filterStatus(st) { S.filterStatus = st; render(); },
   exportExcel()    { exportExcel(); },
+  // Extrato de pontos: calculado aqui com os dados já carregados (mesma seleção do ranking — shared/extrato.js)
+  openStatement(unitId) {
+    const dados = () => ({ units: S.units, regions: S.regions, submissions: S.submissions, disciplinaryActions: S.disciplinaryActions, requirements: S.requirements });
+    const order = () => computeUnitScores(S.submissions, S.units, S.disciplinaryActions).map(u => u.id);
+    openExtrato({
+      unitId: unitId || undefined, title: 'Extrato de pontos por unidade',
+      loadUnit: async id => buildUnitStatement(id, dados(), { viewer: 'admin' }),
+      loadAll: async () => buildStatements(order(), dados(), { viewer: 'admin' }),
+      allLabel: 'Excel de todas as unidades', allFile: 'todas-as-unidades',
+    });
+  },
   exportUniformCsv() { exportUniformCsv(); },
 
   approve(id) { apiReview(id, 'approved', '', S.user).then(() => toast('✅ Aprovado!')); },

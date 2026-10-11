@@ -3,11 +3,13 @@ import {
   subReqs, subSubs, subRegions, setRegionCache, rname, fmtDate, toast, showBanner,
   addSubmission, uploadFile, updateSubmissionProof, updatePassword, reqFilledBy,
   subUnits, computeUnitScores, renderAnonRanking, subParticipants, updateRegionProfile,
-  subDisciplinaryActions, refreshNow,
+  subDisciplinaryActions, refreshNow, fetchStatements, fetchUnitStatement,
   CATEGORIES
 } from './api.js';
 import { mountPortalBar } from './portalBar.js';
 import { mountSurveyButton } from './surveyButton.js';
+import { openExtrato } from './extrato.js';
+import { buildStatements } from '../shared/extrato.js';
 import { loadAnonRanking, rankingStampHtml } from './ranking.js';
 
 // ── CONFIGURAÇÃO POR TEMA ──────────────────────────────────────
@@ -177,6 +179,9 @@ function vPortal() {
         </div>
         <div style="display:flex;gap:.5rem;align-items:center;">
           <img src="/assets/logo-apv.png" alt="APV" style="height:1.3rem;width:auto;object-fit:contain;opacity:.85;">
+          <button onclick="W.openExtrato()"
+            style="background:rgba(0,0,0,.2);border:none;color:rgba(255,255,255,.9);
+            padding:.375rem .7rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">📄 Extrato</button>
           <button onclick="W.openChangePwd()"
             style="background:rgba(0,0,0,.2);border:none;color:rgba(255,255,255,.8);
             padding:.375rem .7rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔑</button>
@@ -548,6 +553,16 @@ function mChangePassword() {
 
 // ── ACTIONS ───────────────────────────────────────────────────
 window.W = {
+  // Extrato das unidades da PRÓPRIA região (o servidor local recusa qualquer outra; sem rede, calcula com o que a tela já tem)
+  openExtrato() {
+    const user = S.user;
+    const offline = () => buildStatements(S.units.filter(u => u.regionId === user.regionId).map(u => u.id),
+      { units: S.units, regions: S.regions, submissions: S.allSubmissions, disciplinaryActions: S.disciplinaryActions, requirements: S.requirements }, { viewer: 'region' });
+    openExtrato({
+      title: `Extrato — unidades da região`, allLabel: 'Excel da região', allFile: user.name || 'regiao',
+      loadAll: async () => { try { return await fetchStatements(user); } catch (e) { if (e?.status === 403 || /permiss/i.test(e?.message || '')) throw e; return offline(); } },
+    });
+  },
   logout() {
     if (_unsubReqs) _unsubReqs();
     if (_unsubSubs) _unsubSubs();

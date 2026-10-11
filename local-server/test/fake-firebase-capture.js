@@ -7,8 +7,8 @@ export const addDoc = async (c, data) => { calls.push({ op: 'add', col: c.name, 
 export const updateDoc = async (d, data) => { calls.push({ op: 'update', col: d.name, id: d.id, data }); };
 export const deleteDoc = async d => { calls.push({ op: 'delete', col: d.name, id: d.id }); };
 export const setDoc = async (d, data, opts) => { calls.push({ op: 'set', col: d.name, id: d.id, data, opts }); };
-export const fakeState = { docs: [] };   // o que getDocs devolve (cada item: { id, data() })
-export const getDocs = async () => ({ docs: fakeState.docs });
+export const fakeState = { docs: [], byCol: {} };   // o que getDocs devolve (cada item: { id, data() }); byCol[nome] vale para essa coleção
+export const getDocs = async q => ({ docs: (q && fakeState.byCol[q.name]) || fakeState.docs });
 export const query = (...a) => a[0];
 export const where = (...w) => { calls.push({ op: 'where', w }); return {}; };
 export const orderBy = () => ({});

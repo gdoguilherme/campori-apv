@@ -5,6 +5,7 @@ import {
   computeUnitScores, computeStars, reqFilledBy, isDeadlinePassed, DISCIPLINE_POINTS, findRecentSameInfraction
 } from '../../../shared/scoring.js';
 import { isUniformReq, normalizeUniformInspection, computeUniformPoints } from '../../../shared/uniforme.js';
+import { buildUnitStatement, buildStatements } from '../../../shared/extrato.js';
 
 export function businessRouter({ store, auth }) {
   const r = express.Router();
@@ -35,6 +36,34 @@ export function businessRouter({ store, auth }) {
     const max = all[0]?.total || 0;
     const rows = all.map(s => ({ ...s, stars: computeStars(s.total, max) }));
     res.json(req.query.meta ? meta({ scores: rows }) : rows);
+  });
+
+  // ── EXTRATO DE PONTOS POR UNIDADE ───────────────────────────
+  // Mesma seleção de pontos do ranking (shared/extrato.js usa computeUnitScores): soma das linhas = total do ranking.
+  // Permissão checada AQUI (não só na tela): admin = qualquer unidade; região = unidades da SUA região (pelo regionId da unidade —
+  // "clube amigo" não muda isso); conselheiro = só a unidade dele; fiscal/aprovador/sem login = não. Fora do escopo → 403 (nunca revela se existe).
+  const statementData = () => ({
+    units: store.list('units'), regions: store.list('regions'), submissions: store.list('submissions'),
+    disciplinaryActions: store.list('disciplinaryActions'), requirements: store.list('requirements'),
+  });
+  const viewerOf = role => (ADMIN_ROLES.includes(role) ? 'admin' : role === 'region' ? 'region' : 'counselor');
+  const canSeeUnit = (user, unit) =>
+    ADMIN_ROLES.includes(user.role) || (user.role === 'region' && !!user.regionId && unit.regionId === user.regionId) || (user.role === 'counselor' && !!user.unitId && unit.id === user.unitId);
+
+  r.get('/scores/units/:id/statement', requireAuth(['superadmin', 'admin', 'region', 'counselor']), (req, res) => {
+    const unit = store.get('units', req.params.id);
+    if (!unit) throw httpError(ADMIN_ROLES.includes(req.user.role) ? 404 : 403, ADMIN_ROLES.includes(req.user.role) ? 'Unidade não encontrada' : 'Sem permissão');
+    if (!canSeeUnit(req.user, unit)) throw httpError(403, 'Sem permissão para ver o extrato desta unidade');
+    res.set('Cache-Control', 'no-store').json(buildUnitStatement(unit.id, statementData(), { viewer: viewerOf(req.user.role) }));
+  });
+
+  // Vários extratos de uma vez (Excel): admin = todas (ou ?regionId=); região = SÓ as unidades da própria região (ignora qualquer regionId pedido)
+  r.get('/scores/statements', requireAuth(['superadmin', 'admin', 'region']), (req, res) => {
+    const data = statementData();
+    const regionId = ADMIN_ROLES.includes(req.user.role) ? (req.query.regionId || null) : req.user.regionId;
+    if (!ADMIN_ROLES.includes(req.user.role) && !regionId) throw httpError(403, 'Sem permissão');
+    const ids = data.units.filter(u => !regionId || u.regionId === regionId).map(u => u.id);
+    res.set('Cache-Control', 'no-store').json(buildStatements(ids, data, { viewer: viewerOf(req.user.role) }));
   });
 
   // ── ENVIO (Região / Conselheiro) ────────────────────────────

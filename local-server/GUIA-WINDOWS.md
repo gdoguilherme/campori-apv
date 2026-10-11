@@ -335,6 +335,11 @@ Se o modo local total der problema, ponha `LOCAL_APP_MODE=0` no `.env` e reinici
 - Funciona offline (a resposta fica no aparelho e sobe sozinha — bolinha 🟡 → 🟢).
 - Modo nuvem (sem o servidor local): cole os blocos `surveys` e `surveyResponses` de `firestore.rules` nas Regras do Firestore (Console do Firebase) antes de usar.
 
+### Extrato de pontos por unidade
+- **Admin:** aba Ranking → toque numa unidade → tabela (data, origem, prova/motivo, pontos, saldo), subtotais e filtro por origem. Botões **📥 CSV da unidade**, **📥 Excel de todas as unidades** e **🖨️ Imprimir/PDF**.
+- **Região:** botão **📄 Extrato** → unidades da própria região e **Excel da região**. **Conselheiro:** **📄 Extrato** → só a própria unidade (funciona sem internet). Fiscal não tem acesso.
+- O total do extrato é sempre o do ranking; pontos aguardando aprovação aparecem à parte ("possíveis") e não entram no total.
+
 ### Barra 🟢🟡🔴 em todas as telas
 Bolinha no canto: 🟢 tudo certo · 🟡 há itens aguardando envio (número ao lado) · 🔴 sem servidor local/internet. Tocando: **Sincronizar agora**, versão do app
 e **Atualizar app** (busca a versão nova e recarrega **sem apagar a fila nem o login**).

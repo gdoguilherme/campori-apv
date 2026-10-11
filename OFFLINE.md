@@ -322,3 +322,15 @@ conta **uma vez** (ranking, bootstrap e portal iguais; `dedupeDisciplinaryAction
 - **Portais:** pílula "📝 Pesquisa de Satisfação" (conselheiro, região, fiscal) **só com pesquisa aberta** (também offline, pelo cache) → formulário mobile-first → **fila offline** (`js/surveyQueue.js`),
   contada na barra 🟢🟡🔴 e enviada pelo "Sincronizar agora". Mensagem de agradecimento; "✏️ Editar minha resposta".
 - **Isolamento:** `shared/scoring.js`, `shared/sync.js`, `business.js` e o ranking nem conhecem a pesquisa; teste de regressão prova que centenas de respostas não mudam nenhum total.
+
+## Extrato de pontos por unidade
+
+- **Regra:** `shared/extrato.js` (`buildUnitStatement`) usa a **mesma seleção de `computeUnitScores`** (aprovadas, a mais recente por unidade|região + requisito, disciplina sem duplicata local×nuvem) →
+  **soma das linhas = total do ranking** (teste com 600 cenários aleatórios). O piso em 0 vira uma linha "Ajuste". **Nenhuma regra de pontuação foi alterada.**
+- **Conteúdo:** `linhas` cronológicas com `saldo`, `subtotais` (provas, regionais, QR, uniforme, disciplina), `pendentes`/`possiveis` (aguardando aprovação — **fora do total**) e `ignorados` (infração repetida local×nuvem).
+  Origem da linha: Unidade, Fiscal, **Regional · <região>**, QR Code, Fiscal · Uniforme, Disciplina · Unidade/Região. Reinspeção de uniforme substitui (não duplica). *Ajustes manuais do admin não existem no sistema de pontos, então não há esta fonte.*
+- **Servidor local:** `GET /scores/units/:id/statement` e `GET /scores/statements` (Excel). **Permissão no servidor:** admin = qualquer unidade; **região** = unidades da própria região (pelo `regionId` da unidade — "clube amigo" não muda); **conselheiro** = só a dele;
+  fiscal/aprovador/sem login = negado. Fora do escopo → **403** (sem revelar se a unidade existe). O extrato nunca traz nomes/provas/pontos de outras unidades; o conselheiro não vê o *motivo* da penalidade da região.
+- **Telas:** admin → Ranking → clique na unidade (tabela com filtro por origem, subtotais; 📥 CSV da unidade, 📥 Excel de todas as unidades — aba *Resumo* + uma por unidade —, 🖨️ Imprimir/PDF);
+  região e conselheiro → **📄 Extrato** (região: lista das unidades da região + "Excel da região"; conselheiro: a própria unidade, também **offline** com o snapshot do celular).
+- **Nuvem:** `api.js` calcula no navegador (o Firestore do app não tem login, então o escopo é aplicado no cliente); o servidor local aplica no servidor.

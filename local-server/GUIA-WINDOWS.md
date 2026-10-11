@@ -294,6 +294,12 @@ Um comando que confere e imprime ✅/❌/⚠️: Node ≥ 22.13, `.env` (QR_SECR
 portas 443/8787, banco com dados, **último backup há menos de 15 min**, espaço em disco, **DNS `local.gdtmidia.com.br` → IP deste PC** e
 a nuvem (só informativo). Termina com **✅ PRONTO** ou a lista de ❌ a corrigir (cada um traz o que fazer). Rode com o servidor ligado.
 
+### QR Codes de todas as provas: `npm run gerar-qrcodes`
+**Só depois de cadastrar os requisitos reais** (trocar requisito, variante ou pontos depois invalida o QR já impresso). Gera, em `data\qrcodes\`
+(ou na pasta que você indicar, ex.: `npm run gerar-qrcodes -- E:\qr`), um PNG por QR e o **`TODOS-OS-QRCODES.pdf`** (6 por página A4, QR de 6,2 cm) — é só abrir o PDF e imprimir.
+Também dá para gerar pelo painel `/status` (botão **Gerar QR Codes**) ou, no admin, por **Requisitos → 🔲 QR Codes (todos)**.
+O `/status` mostra quantos QR foram gerados, quando, e avisa se os requisitos ou o `QR_SECRET` mudaram depois (aí é preciso reimprimir).
+
 ### Fotos: `npm run backup-uploads`
 Copia `data\uploads` para `backups\uploads-AAAAMMDD-HHMM\` e **confere** (nº de arquivos e bytes). Com destino: `npm run backup-uploads -- E:\`.
 O painel `/status` mostra quantos arquivos/MB existem e o aviso "as fotos ficam só neste PC".

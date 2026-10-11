@@ -6,6 +6,7 @@ import { statusPageHtml } from './status-page.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { stamp } from '../ops.js';
+import { generateQrFiles } from '../qrcodes.js';
 
 // Painel de status do PC (pessoas não técnicas). A página em si é pública (não contém dados);
 // os DADOS (/status/api/*) só saem no próprio PC ou com o PIN (STATUS_PIN no .env).
@@ -55,6 +56,14 @@ export function statusRouter({ store, config, engine, startedAt, isLocalRequest,
       if (!engine) return res.json({ ok: false, message: 'Sincronização indisponível neste servidor.' });
       const result = await engine.pullNow();
       res.json({ ...result, summary: buildSummary({ store, config, engine, startedAt, tls: tls() }) });
+    } catch (e) { next(e); }
+  });
+
+  // "Gerar QR Codes": roda o MESMO código do `npm run gerar-qrcodes` e informa a pasta (PNGs + TODOS-OS-QRCODES.pdf)
+  r.post('/api/gerar-qrcodes', guard, async (_req, res, next) => {
+    try {
+      const r2 = await generateQrFiles({ store, config });
+      res.json({ ok: r2.ok, message: r2.ok ? `${r2.count} QR Code(s) gerado(s) em ${r2.dir}` : r2.message, dir: r2.dir ?? null, count: r2.count ?? 0, summary: buildSummary({ store, config, engine, startedAt, tls: tls() }) });
     } catch (e) { next(e); }
   });
 

@@ -29,6 +29,7 @@ server/.fly/
 
 # Servidor local (offline) — dados do evento, logs, backups, segredos
 local-server/data/
+local-server/data/qrcodes/
 local-server/logs/
 local-server/backups/
 local-server/.env

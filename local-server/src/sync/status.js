@@ -2,6 +2,7 @@
 // erros recentes e o estado por unidade e por requisito.
 import { COLLECTIONS } from '../db.js';
 import { cachedDirStats, fmtBytes, collectionCounts, diskFree, lastBackup } from '../ops.js';
+import { qrStatus } from '../qrcodes.js';
 
 const CLOUD_LABEL = {
   online: ['green', 'Nuvem disponível'], offline: ['red', 'Nuvem fora do ar (sem internet?)'], error: ['red', 'Nuvem recusou o acesso'],
@@ -81,6 +82,7 @@ export function buildSummary({ store, config, engine, startedAt, tls = null, now
         backup: b ? { lastAt: b.at, count: b.count, file: b.file } : null,
       };
     })(),
+    qrcodes: qrStatus({ store, config }),
     errors: { failing: failing.slice(0, 20), events: errorEvents.map(e => ({ ts: e.ts, message: e.message })) },
     alerts: store.listEvents({ alertsOnly: true, unackedOnly: true, limit: 30 }).map(e => ({ id: e.id, ts: e.ts, kind: e.kind, level: e.level, message: e.message })),
     units: Object.values(unitInfo).map(withState).sort((a, b) => a.name.localeCompare(b.name, 'pt')),

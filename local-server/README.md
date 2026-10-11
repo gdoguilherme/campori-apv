@@ -24,6 +24,7 @@ cenários aleatórios.
 | `src/app.js`, `src/routes/*` | API HTTP |
 | `src/server.js` | Processo do servidor |
 | `src/preflight.js`, `src/reset-events.js`, `src/ops.js`, `scripts/*.js` | `npm run preflight`, `npm run resetar-eventos-de-teste`, `npm run backup-uploads`, painel `/status` ampliado — ver [GUIA-WINDOWS.md](GUIA-WINDOWS.md) (Parte 3) |
+| `src/qrcodes.js`, `scripts/gerar-qrcodes.js` | `npm run gerar-qrcodes [destino]`: PNG de cada QR + `TODOS-OS-QRCODES.pdf` — ver a seção **QR Codes em lote** abaixo |
 | `src/dbtool.js`, `scripts/dbtool.js` | Ferramenta de último caso `npm run dbtool` (listar/ver/alterar/apagar com backup, `dirty=1` e índices coerentes) — ver [DBTOOL.md](DBTOOL.md) |
 | `src/sync/` | Sincronização com o Firebase em segundo plano: `engine.js` (laço, backoff, estado), `push.js` (envio por tipo de dado), `convert.js` (merge de 3 vias), `cloud.js` (firebase-admin), `status.js` (resumo do painel) — ver [OFFLINE.md](../OFFLINE.md) |
 | `src/routes/status*` | Painel de status `http://localhost:8787/status` (PIN fora do PC) |
@@ -97,6 +98,26 @@ Autenticação: `Authorization: Bearer <token>` (JWT 8h, mesmo formato da nuvem)
 
 O servidor também serve o frontend estático (`/pages`, `/js`, `/css`, `/assets`, `/shared`) —
 **apenas essas pastas**; credenciais e o banco nunca são expostos.
+
+## QR Codes em lote (sem passar pelo portal do Fiscal)
+
+> ⚠️ **Imprima só depois de cadastrar os requisitos REAIS.** O QR carrega `(requisito, variante, pontos)` + o hash do `QR_SECRET`: trocar requisito,
+> variante ou pontos (ou o `QR_SECRET`) **invalida o QR já impresso**. Gerou de novo? Reimprima.
+
+```bash
+cd local-server
+npm run gerar-qrcodes                 # grava em data\qrcodes\
+npm run gerar-qrcodes -- E:\qr        # ou na pasta que você indicar (ex.: pen-drive)
+```
+- Um PNG por QR, com nome `<prova>__<variante>__<pontos>pts.png` (sem acentos nem caracteres inválidos), `TODOS-OS-QRCODES.pdf`
+  (6 por página A4, com título, variante e pontos; QR de 6,2 cm) e `manifest.json`.
+- O hash é calculado com o **mesmo `signQr` do servidor** e o `QR_SECRET` do `.env` — o que o `/qr/redeem` valida. Sem `QR_SECRET` no `.env` o comando **recusa**
+  (um segredo de desenvolvimento geraria QR que não vale na nuvem).
+- Gerar de novo apaga só os arquivos que a geração anterior criou (nunca outros arquivos da pasta).
+- A pasta `data/qrcodes/` **não vai para o git** (`.gitignore`).
+- **Painel `/status`** (cartão "QR Codes das provas"): quantidade gerada, data, pasta, avisos de "requisitos mudaram" / "QR_SECRET mudou" e o botão **Gerar QR Codes** (protegido por PIN fora do PC).
+- **Pelo admin:** Requisitos → **🔲 QR Codes (todos)** abre a página de impressão (6 por A4) e baixa o PDF — usa `/qr/generate`, também na nuvem.
+- Dependências: `qrcode` (JavaScript puro — **sem compilação nativa**, funciona com `npm install` normal no Windows). `jsqr` e `pngjs` são só de teste (`devDependencies`).
 
 ## Decisões / limites conhecidos
 

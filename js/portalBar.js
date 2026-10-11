@@ -4,6 +4,7 @@
 import { LOCAL_APP } from './config.js';
 import { getToken } from './auth.js';
 import { fetchJson } from './net.js';
+import { pendingSurveyCount, syncSurveyQueue } from './surveyQueue.js';
 
 // Estado da bolinha — função pura (testada em local-server/test/portal-bar.test.js)
 export function barState({ local = false, onLine = true, serverUp = true, pendingDevice = 0, pendingCloud = 0, cloudState = null, authExpired = false } = {}) {
@@ -83,6 +84,7 @@ export function mountPortalBar({ getPending = null, syncNow = null, offsetBottom
     if (stopped || document.hidden) return;
     let pendingDevice = 0, pendingCloud = 0, cloudState = null, serverUp = true, authExpired = false;
     try { pendingDevice = (await getPending?.()) || 0; } catch { /* sem fila neste portal */ }
+    try { pendingDevice += await pendingSurveyCount(); } catch { /* sem fila da pesquisa */ }
     if (LOCAL_APP) {
       try {
         const tk = getToken();
@@ -101,6 +103,8 @@ export function mountPortalBar({ getPending = null, syncNow = null, offsetBottom
     busy = true; msg = ''; paint();
     try {
       const sum = await syncNow?.();
+      let surveyMsg = '';
+      try { const sq = await syncSurveyQueue({ manual: true }); if (sq.sent) surveyMsg = ` ✅ ${sq.sent} resposta(s) da pesquisa enviada(s).`; } catch { /* sem fila da pesquisa */ }
       let cloudMsg = '';
       if (LOCAL_APP) {
         try {
@@ -110,7 +114,7 @@ export function mountPortalBar({ getPending = null, syncNow = null, offsetBottom
         } catch { cloudMsg = ' Servidor local não respondeu.'; }
       }
       const sent = (sum?.accepted?.length ?? sum?.sent ?? 0);
-      msg = (sum?.offline ? 'Sem conexão com o servidor.' : sum?.authExpired ? 'Sessão expirada — entre de novo.' : sent ? `✅ ${sent} item(ns) enviado(s).` : 'Nada pendente neste aparelho.') + cloudMsg;
+      msg = (sum?.offline ? 'Sem conexão com o servidor.' : sum?.authExpired ? 'Sessão expirada — entre de novo.' : sent ? `✅ ${sent} item(ns) enviado(s).` : surveyMsg ? '' : 'Nada pendente neste aparelho.') + surveyMsg + cloudMsg;
     } catch (e) { msg = `Não foi possível sincronizar: ${e.message}`; }
     busy = false;
     await refresh();

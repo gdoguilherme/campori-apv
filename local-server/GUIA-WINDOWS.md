@@ -328,6 +328,13 @@ Se o modo local total der problema, ponha `LOCAL_APP_MODE=0` no `.env` e reinici
 - Funciona offline: se o servidor cair, a inspeção fica na fila do aparelho e sobe sozinha (barra 🟡 → **Sincronizar agora**).
 - O admin vê o detalhe (erros por categoria + observações) na **Fila**, aprova/rejeita, e baixa o **CSV** em *Histórico → 👔 CSV Uniforme*.
 
+### Pesquisa de Satisfação (sem pontos)
+- **Admin → 📝 Pesquisa → ✨ Criar pesquisa de exemplo** (já vem pronta), revise as perguntas e toque em **▶ Abrir**. Aparece o botão "📝 Pesquisa de Satisfação" para conselheiros, regiões e fiscais. **⏸ Fechar** quando quiser encerrar.
+- É **anônima**: não guarda nome nem usuário (só perfil e região). Quem já respondeu pode **editar** (substitui a resposta anterior).
+- **Resultados:** na mesma aba (📊): médias, distribuição, textos livres, filtros por perfil e região, e **CSV**. Não altera ranking, pontos nem disciplina.
+- Funciona offline (a resposta fica no aparelho e sobe sozinha — bolinha 🟡 → 🟢).
+- Modo nuvem (sem o servidor local): cole os blocos `surveys` e `surveyResponses` de `firestore.rules` nas Regras do Firestore (Console do Firebase) antes de usar.
+
 ### Barra 🟢🟡🔴 em todas as telas
 Bolinha no canto: 🟢 tudo certo · 🟡 há itens aguardando envio (número ao lado) · 🔴 sem servidor local/internet. Tocando: **Sincronizar agora**, versão do app
 e **Atualizar app** (busca a versão nova e recarrega **sem apagar a fila nem o login**).

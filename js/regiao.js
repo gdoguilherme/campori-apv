@@ -7,6 +7,7 @@ import {
   CATEGORIES
 } from './api.js';
 import { mountPortalBar } from './portalBar.js';
+import { mountSurveyButton } from './surveyButton.js';
 import { loadAnonRanking, rankingStampHtml } from './ranking.js';
 
 // ── CONFIGURAÇÃO POR TEMA ──────────────────────────────────────
@@ -70,6 +71,7 @@ export function init(theme) {
   S.user = user;
   startExpiryWatcher();
   mountPortalBar({ getPending: async () => 0, syncNow: async () => { await refreshNow(); return { sent: 0 }; } });
+  mountSurveyButton({ offsetBottom: '3.6rem' });
 
   _unsubReqs        = subReqs(reqs => { S.requirements = reqs; render(); });
   _unsubSubs        = subSubs(user.regionId, subs => { S.submissions = subs; render(); });

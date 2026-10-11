@@ -305,3 +305,20 @@ conta **uma vez** (ranking, bootstrap e portal iguais; `dedupeDisciplinaryAction
 - **Admin** (só admin): Requisitos → `🔲 QR Codes (todos)` → `pages/qrcodes.html` (grade 2×3, QR de 6,2 cm, progresso "N de M" em lotes de 6, Imprimir / Baixar PDF; payloads só em memória; usa `/qr/generate`, local e nuvem).
 - **Servidor local:** `npm run gerar-qrcodes [destino]` (`src/qrcodes.js`) grava PNG por QR + `TODOS-OS-QRCODES.pdf` + `manifest.json` em `data/qrcodes/`; hash = `signQr` do servidor com o `QR_SECRET` atual; `/status` mostra contagem, data e avisos (requisitos ou segredo mudaram).
 - **Regra:** imprimir só depois de cadastrar os requisitos reais — trocar requisito/variante/pontos (ou `QR_SECRET`) invalida o QR impresso. Testes decodificam cada PNG/PDF e resgatam no `/qr/redeem`.
+
+## Pesquisa de Satisfação (sem pontos, anônima, isolada da pontuação)
+
+- **Dados:** `surveys` (`titulo`, `aberta`, `perguntas[]`: `{id, tipo: nota5|escolha|simnao|texto, texto, opcoes[], obrigatoria}`) e `surveyResponses`
+  (`surveyId`, `answers`, `perfil`, `regionId?`, `clientId`, `criadoEm`, `editadoEm?`). **Nenhum** userId, nome ou usuário é gravado: só o **perfil** (conselheiro/região/fiscal, vindo do token)
+  e a **região** (de região/conselheiro). Id da resposta = `resp_<pesquisa>_<clientId>` → reenviar/editar com o mesmo `clientId` **substitui** (mantém `criadoEm`).
+- **"Já respondeu"** é um marcador **só no aparelho** (`localStorage`, por login) com o `clientId` e as respostas (para editar). O servidor não sabe quem respondeu.
+- **Servidor local:** `routes/survey.js` — `GET /surveys/open` (qualquer login), `POST /surveys/:id/responses` (conselheiro/região/fiscal; recusa pesquisa fechada `409 SURVEY_CLOSED`),
+  e, **só admin**: `GET/POST/PATCH/DELETE /surveys`, `POST /surveys/sample` (pesquisa de exemplo), `GET /surveys/:id/responses`. `/data/surveyResponses` só admin lê; ninguém grava por `/data`.
+  Não dá para apagar pesquisa que já tem respostas (feche-a).
+- **Sync com a nuvem:** coleções no mesmo padrão (dirty/updatedAt/merge de 3 vias). **Respostas só acrescentam**: excluir uma resposta localmente nunca a apaga na nuvem.
+  **Modo nuvem:** o navegador grava direto no Firestore — é preciso colar os blocos `surveys` e `surveyResponses` de `firestore.rules` no Console do Firebase (passo manual, o projeto não usa o CLI).
+- **Admin → 📝 Pesquisa:** criar/editar perguntas, abrir/fechar, ✨ pesquisa de exemplo (nota geral, organização, alimentação, programação, espiritual, pontuação/sistema de provas, o que melhorar, o que manter),
+  **resultados** (média e distribuição, escolha, sim/não, textos livres, filtro por perfil e região, total) e **CSV** (sem identidade).
+- **Portais:** pílula "📝 Pesquisa de Satisfação" (conselheiro, região, fiscal) **só com pesquisa aberta** (também offline, pelo cache) → formulário mobile-first → **fila offline** (`js/surveyQueue.js`),
+  contada na barra 🟢🟡🔴 e enviada pelo "Sincronizar agora". Mensagem de agradecimento; "✏️ Editar minha resposta".
+- **Isolamento:** `shared/scoring.js`, `shared/sync.js`, `business.js` e o ranking nem conhecem a pesquisa; teste de regressão prova que centenas de respostas não mudam nenhum total.

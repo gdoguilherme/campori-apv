@@ -4,7 +4,7 @@
 // GARANTIA: o extrato usa a MESMA seleção de pontos de computeUnitScores (shared/scoring.js) — aprovadas, a mais recente por
 // (unidade|região + requisito), disciplina sem duplicata local×nuvem — e o total devolvido é o do ranking. A soma das linhas = total
 // (testes aleatórios conferem). NADA aqui altera regra de pontuação.
-import { tsSeconds, computeUnitScores, dedupeDisciplinaryActions, DISCIPLINE_POINTS } from './scoring.js';
+import { tsSeconds, computeUnitScores, dedupeDisciplinaryActions, DISCIPLINE_POINTS, reqFilledBy } from './scoring.js';
 
 export const CATEGORIAS = ['provas', 'regionais', 'qr', 'uniforme', 'disciplina'];
 export const CATEGORIA_LABEL = { provas: 'Provas da unidade', regionais: 'Pontos da região', qr: 'QR Codes', uniforme: 'Inspeção de uniforme', disciplina: 'Disciplina', piso: 'Ajuste de piso' };
@@ -50,9 +50,33 @@ function pickPending(unit, submissions, approvedKeys) {
   return out;
 }
 
+// Requisitos que se aplicam à unidade e em que ela NÃO pontuou (0 pt): só INFORMATIVO (não entra em total/linhas) e só para o ADMIN.
+// Aplica: ativo; do Conselheiro e inspeção de uniforme → a unidade; Regional e "Só Fiscal" → a região dela (se a modalidade combina,
+// como no portal). Motivo: Aprovado com 0 pts · Aguardando aprovação · Rejeitado · Não preenchido.
+export function buildNaoPontuados(unit, region, dados, picked) {
+  const { submissions = [], requirements = [] } = dados;
+  const earned = new Map();
+  for (const { s } of picked) earned.set(s.requirementId, (earned.get(s.requirementId) || 0) + (s.requirementPoints || 0));
+  const cat = region?.competitionCategory || null;
+  const out = [];
+  for (const r of [...requirements].filter(x => x.active !== false).sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || String(a.name).localeCompare(String(b.name), 'pt'))) {
+    const tipoReq = r.inspection === 'uniforme' ? 'uniforme' : reqFilledBy(r);
+    const regional = tipoReq === 'regional' || tipoReq === 'fiscal';
+    if (regional && cat && r.competitionCategory && r.competitionCategory !== 'Ambos' && r.competitionCategory !== cat) continue;   // não vale para esta modalidade
+    if (earned.get(r.id) > 0) continue;                                                                                     // pontuou
+    const mine = submissions.filter(s => s.requirementId === r.id && (s.unitId ? s.unitId === unit.id : s.regionId === unit.regionId))
+      .sort((a, b) => tsSeconds(b.submittedAt) - tsSeconds(a.submittedAt));
+    const motivo = picked.some(({ s }) => s.requirementId === r.id) ? 'Aprovado com 0 pts'
+      : mine.some(s => s.status === 'pending') ? 'Aguardando aprovação'
+      : mine[0]?.status === 'rejected' ? 'Rejeitado' : 'Não preenchido';
+    out.push({ requirementId: r.id, requisito: r.name || r.id, tipo: ({ conselheiro: 'Unidade', regional: 'Regional', fiscal: 'Fiscal (região)', uniforme: 'Uniforme' })[tipoReq] || 'Unidade', pontosPossiveis: r.points || 0, motivo });
+  }
+  return out;
+}
+
 // dados: { units, regions, submissions, disciplinaryActions, requirements }
 // opts:  { viewer: 'admin'|'region'|'counselor' (counselor não vê o motivo da penalidade da REGIÃO), generatedAt, ranking (mapa id→total já calculado) }
-export function buildUnitStatement(unitId, dados, { viewer = 'admin', generatedAt = Date.now(), ranking = null } = {}) {
+export function buildUnitStatement(unitId, dados, { viewer = 'admin', generatedAt = Date.now(), ranking = null, incluirNaoPontuados = false } = {}) {
   const { units = [], regions = [], submissions = [], disciplinaryActions = [], requirements = [] } = dados || {};
   const unit = units.find(u => u.id === unitId);
   if (!unit) return null;
@@ -119,6 +143,7 @@ export function buildUnitStatement(unitId, dados, { viewer = 'admin', generatedA
     pendentes: pend.sort((a, b) => b.data - a.data),
     possiveis: pend.reduce((a, p) => a + p.pontos, 0),
     ignorados,
+    ...(incluirNaoPontuados && viewer === 'admin' ? { naoPontuados: buildNaoPontuados(unit, region, dados, picked) } : {}),   // só o ADMIN pede e recebe
   };
 }
 
@@ -160,14 +185,17 @@ export function sheetName(nome, usados = new Set()) {
   return n;
 }
 export function workbookData(statements, { fmtDateTime = defaultFmt, titulo = 'Resumo' } = {}) {
-  const resumo = [['Unidade', 'Região', 'Total', 'Provas', 'Regional', 'QR Code', 'Uniforme', 'Disciplina', 'Pontos possíveis']];
+  const comNao = statements.some(st => st.naoPontuados);   // só o Excel do ADMIN traz os requisitos sem pontuação
+  const resumo = [['Unidade', 'Região', 'Total', 'Provas', 'Regional', 'QR Code', 'Uniforme', 'Disciplina', 'Pontos possíveis', ...(comNao ? ['Requisitos sem pontuação'] : [])]];
   const usados = new Set();
   const abas = statements.map(st => {
-    resumo.push([st.unidade.nome, st.unidade.regiao, st.total, st.subtotais.provas, st.subtotais.regionais, st.subtotais.qr, st.subtotais.uniforme, st.subtotais.disciplina + st.subtotais.piso, st.possiveis]);
+    resumo.push([st.unidade.nome, st.unidade.regiao, st.total, st.subtotais.provas, st.subtotais.regionais, st.subtotais.qr, st.subtotais.uniforme, st.subtotais.disciplina + st.subtotais.piso, st.possiveis, ...(comNao ? [st.naoPontuados?.length ?? 0] : [])]);
     return {
       nome: sheetName(st.unidade.nome, usados),
       linhas: [['Unidade', st.unidade.nome], ['Região', st.unidade.regiao], ['Gerado em', fmtDate(st.geradoEm, fmtDateTime)], ['Total', st.total], [],
-        ['Data', 'Origem', 'Descrição', 'Pontos', 'Saldo'], ...st.linhas.map(l => [fmtDate(l.data, fmtDateTime), l.origemLabel, l.descricao, l.pontos, l.saldo])],
+        ['Data', 'Origem', 'Descrição', 'Pontos', 'Saldo'], ...st.linhas.map(l => [fmtDate(l.data, fmtDateTime), l.origemLabel, l.descricao, l.pontos, l.saldo]),
+        ...(st.naoPontuados ? [[], ['Requisitos sem pontuação (não preenchidos ou com 0 pt)'], ['Requisito', 'Tipo', 'Pontos possíveis', 'Motivo'],
+          ...(st.naoPontuados.length ? st.naoPontuados.map(n => [n.requisito, n.tipo, n.pontosPossiveis, n.motivo]) : [['Todos os requisitos aplicáveis pontuaram']])] : [])],
     };
   });
   return { resumo, abas, titulo };
@@ -192,3 +220,9 @@ export function statementPrintHtml(stmt, { fmtDateTime = defaultFmt, categoria =
     <div class="foot">Pontos pendentes de aprovação não entram no total. Documento gerado pelo sistema de pontuação.</div>
   </body></html>`;
 }
+
+// Linhas da aba "Sem pontuação" do Excel do Histórico (admin): uma por unidade × requisito sem pontos
+export const naoPontuadosRows = statements => [
+  ['Unidade', 'Região', 'Requisito', 'Tipo', 'Pontos possíveis', 'Motivo'],
+  ...statements.flatMap(st => (st.naoPontuados || []).map(n => [st.unidade.nome, st.unidade.regiao, n.requisito, n.tipo, n.pontosPossiveis, n.motivo])),
+];

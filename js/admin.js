@@ -16,7 +16,7 @@ import {
 import { loadIdentifiedRanking, rankingStampHtml } from './ranking.js';
 import { mountPortalBar } from './portalBar.js';
 import { openExtrato } from './extrato.js';
-import { buildUnitStatement, buildStatements } from '../shared/extrato.js';
+import { buildUnitStatement, buildStatements, naoPontuadosRows } from '../shared/extrato.js';
 import { QUESTION_TYPES, TYPE_LABEL, PROFILES, PROFILE_LABEL, summarize, filterResponses, buildSurveyCsv } from '../shared/survey.js';
 import { UNIFORM_CATEGORIES, buildUniformCsv, computeUniformPoints } from '../shared/uniforme.js';
 import { dedupeDisciplinaryActions, findRecentSameInfraction, DISCIPLINE_DUP_WINDOW_MS } from '../shared/scoring.js';
@@ -109,6 +109,9 @@ function exportExcel() {
     'Observações': s.notes || ''
   }));
   window.XLSX.utils.book_append_sheet(wb, window.XLSX.utils.json_to_sheet(rows), 'Comprovações');
+  // requisitos sem pontuação (não preenchidos / pendentes / rejeitados / 0 pt) por unidade — só no Excel do ADMIN
+  const sts = buildStatements(S.units.map(u => u.id), { units: S.units, regions: S.regions, submissions: S.submissions, disciplinaryActions: S.disciplinaryActions, requirements: S.requirements }, { viewer: 'admin', incluirNaoPontuados: true });
+  window.XLSX.utils.book_append_sheet(wb, window.XLSX.utils.aoa_to_sheet(naoPontuadosRows(sts)), 'Sem pontuação');
   const sc = computeUnitScores(S.submissions, S.units, S.disciplinaryActions);
   window.XLSX.utils.book_append_sheet(wb, window.XLSX.utils.json_to_sheet(
     sc.map((s, i) => ({ 'Posição': i + 1, 'Unidade': s.name, 'Região': rname(s.regionId), 'Pontos Totais': s.total, 'Aprovações': s.count }))
@@ -1601,8 +1604,8 @@ window.W = {
     const order = () => computeUnitScores(S.submissions, S.units, S.disciplinaryActions).map(u => u.id);
     openExtrato({
       unitId: unitId || undefined, title: 'Extrato de pontos por unidade',
-      loadUnit: async id => buildUnitStatement(id, dados(), { viewer: 'admin' }),
-      loadAll: async () => buildStatements(order(), dados(), { viewer: 'admin' }),
+      loadUnit: async id => buildUnitStatement(id, dados(), { viewer: 'admin', incluirNaoPontuados: true }),
+      loadAll: async () => buildStatements(order(), dados(), { viewer: 'admin', incluirNaoPontuados: true }),   // Excel do admin: + requisitos sem pontuação
       allLabel: 'Excel de todas as unidades', allFile: 'todas-as-unidades',
     });
   },

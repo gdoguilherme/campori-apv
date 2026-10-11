@@ -10,10 +10,12 @@ import {
   createUnit, updateUnit, deleteUnit as apiDeleteUnit, allocateParticipant,
   computeUnitScores, computeStars,
   subDisciplinaryActions, createDisciplinaryAction, deleteDisciplinaryAction as apiDeleteDiscipline, refreshNow,
+  subSurveys, createSurvey, createSampleSurvey, updateSurvey, deleteSurvey as apiDeleteSurvey, fetchSurveyResponses,
   CATEGORIES, PHASES, ROLES, COMP_CATS, SCORE_PCTS, AREAS_ATUACAO, FILLED_BY
 } from './api.js';
 import { loadIdentifiedRanking, rankingStampHtml } from './ranking.js';
 import { mountPortalBar } from './portalBar.js';
+import { QUESTION_TYPES, TYPE_LABEL, PROFILES, PROFILE_LABEL, summarize, filterResponses, buildSurveyCsv } from '../shared/survey.js';
 import { UNIFORM_CATEGORIES, buildUniformCsv, computeUniformPoints } from '../shared/uniforme.js';
 import { dedupeDisciplinaryActions, findRecentSameInfraction, DISCIPLINE_DUP_WINDOW_MS } from '../shared/scoring.js';
 
@@ -33,8 +35,10 @@ const S = {
   photoUrl: null, modal: null,
   loading: false,
   rankInfo: null,
+  surveys: [], surveyEdit: null, surveyResults: null,   // Pesquisa de Satisfação (isolada da pontuação)
 };
 
+let _unsubSurveys = null;
 let _unsubReqs = null, _unsubSubs = null, _unsubRegions = null, _unsubParticipants = null, _unsubUnits = null, _unsubDiscipline = null;
 
 // ── INIT ──────────────────────────────────────────────────────
@@ -54,6 +58,7 @@ export function init() {
   _unsubParticipants = subParticipants(ps => { S.participants = ps; render(); });
   _unsubUnits        = subUnits(units => { S.units = units; render(); });
   _unsubDiscipline   = subDisciplinaryActions(actions => { S.disciplinaryActions = actions; render(); });
+  if (isAdmin()) _unsubSurveys = subSurveys(list => { S.surveys = list; render(); });
 
   refreshUsers();
   render();
@@ -130,6 +135,7 @@ function subItemDetails(sub) {
 function render() {
   const el = document.getElementById('app');
   if (!el) return;
+  if (S.modal === 'survey-form') readSurveyForm();   // dados novos chegando não podem apagar o que o admin está digitando
   let html = vAdmin();
   if (S.modal === 'req-form')            html += mReqForm();
   else if (S.modal === 'user-form')      html += mUserForm();
@@ -140,6 +146,7 @@ function render() {
   else if (S.modal === 'unit-participants')  html += mUnitParticipants();
   else if (S.modal === 'counselor-form')     html += mCounselorForm();
   else if (S.modal === 'discipline-form')    html += mDisciplineForm();
+  else if (S.modal === 'survey-form')        html += mSurveyForm();
   else if (S.modal === 'credentials')    html += mCredentialsModal();
   else if (S.modal === 'photo')          html += mPhoto();
   else if (S.modal === 'change-password') html += mChangePassword();
@@ -159,6 +166,7 @@ function vAdmin() {
       { id: 'participants', label: '👥 Participantes' },
       { id: 'units',        label: '🏕️ Unidades' },
       { id: 'discipline',   label: '⚠️ Disciplina' },
+      { id: 'survey',       label: '📝 Pesquisa' },
     ] : []),
     ...(isSuperAdmin() ? [
       { id: 'regions', label: '🗺️ Regiões' },
@@ -216,6 +224,7 @@ function vAdmin() {
         ${S.adminTab === 'participants' && isAdmin()       ? tParticipants() : ''}
         ${S.adminTab === 'units'        && isAdmin()       ? tUnits()    : ''}
         ${S.adminTab === 'discipline'   && isAdmin()       ? tDiscipline() : ''}
+        ${S.adminTab === 'survey'       && isAdmin()       ? tSurvey() : ''}
         ${S.adminTab === 'regions'      && isSuperAdmin()  ? tRegions()  : ''}
         ${S.adminTab === 'users'        && isSuperAdmin()  ? tUsers()    : ''}
       </div>
@@ -305,6 +314,125 @@ function tQueue() {
     }).join('')}
   </div>`;
 }
+
+// ── TAB: PESQUISA DE SATISFAÇÃO (sem pontos — não afeta ranking, pontos nem disciplina) ─────────────
+function tSurvey() {
+  const res = S.surveyResults;
+  if (res) return vSurveyResults(res);
+  return `
+  <div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;gap:.5rem;flex-wrap:wrap;">
+      <span style="font-weight:800;color:#1e293b;">📝 Pesquisas (${S.surveys.length})</span>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
+        <button onclick="W.createSampleSurvey()" style="background:#f1f5f9;color:#334155;border:none;padding:.5rem .9rem;border-radius:.75rem;font-size:.82rem;font-weight:700;cursor:pointer;">✨ Criar pesquisa de exemplo</button>
+        <button onclick="W.openSurveyForm(null)" style="background:#0D2B6E;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Nova</button>
+      </div>
+    </div>
+    <div style="font-size:.76rem;color:#475569;background:#eff6ff;border-radius:.6rem;padding:.5rem .7rem;margin-bottom:.8rem;">🔒 Pesquisa <b>anônima</b> e <b>sem pontos</b>: não guarda nome nem usuário (só perfil e região) e não altera ranking, pontuação nem disciplina. Só <b>abertas</b> aparecem para conselheiros, regiões e fiscais.</div>
+    ${S.surveys.length === 0
+      ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">📝</div><p style="font-weight:600;">Nenhuma pesquisa cadastrada</p><p style="font-size:.85rem;">Use “Criar pesquisa de exemplo” para começar.</p></div>`
+      : `<div style="display:flex;flex-direction:column;gap:.625rem;">${S.surveys.map(sv => `
+        <div class="card" style="padding:1rem;overflow:visible;">
+          <div style="display:flex;justify-content:space-between;gap:.5rem;align-items:flex-start;">
+            <div style="flex:1;"><div style="font-weight:800;color:#1e293b;">${escHtml(sv.titulo)}</div>
+              <div style="font-size:.78rem;color:#64748b;margin-top:.15rem;">${(sv.perguntas || []).length} pergunta(s)</div></div>
+            <span style="background:${sv.aberta ? '#dcfce7' : '#f1f5f9'};color:${sv.aberta ? '#166534' : '#64748b'};font-size:.72rem;font-weight:800;padding:.25rem .7rem;border-radius:999px;">${sv.aberta ? '🟢 Aberta' : '⚪ Fechada'}</span>
+          </div>
+          <div style="display:flex;gap:.45rem;flex-wrap:wrap;margin-top:.7rem;">
+            <button onclick="W.toggleSurvey('${sv.id}')" style="background:${sv.aberta ? '#fef3c7' : '#16a34a'};color:${sv.aberta ? '#92400e' : '#fff'};border:none;padding:.5rem .9rem;border-radius:.65rem;font-size:.8rem;font-weight:700;cursor:pointer;">${sv.aberta ? '⏸ Fechar' : '▶ Abrir'}</button>
+            <button onclick="W.openSurveyResults('${sv.id}')" style="background:#0D2B6E;color:#fff;border:none;padding:.5rem .9rem;border-radius:.65rem;font-size:.8rem;font-weight:700;cursor:pointer;">📊 Resultados</button>
+            <button onclick="W.openSurveyForm('${sv.id}')" style="background:#f1f5f9;color:#334155;border:none;padding:.5rem .9rem;border-radius:.65rem;font-size:.8rem;font-weight:700;cursor:pointer;">✏️ Editar</button>
+            <button onclick="W.deleteSurvey('${sv.id}')" style="background:#fef2f2;color:#dc2626;border:none;padding:.5rem .7rem;border-radius:.65rem;font-size:.8rem;cursor:pointer;">🗑️</button>
+          </div>
+        </div>`).join('')}</div>`}
+  </div>`;
+}
+
+function vSurveyResults(res) {
+  const sv = S.surveys.find(x => x.id === res.surveyId);
+  if (!sv) return `<p>Pesquisa não encontrada.</p><button onclick="W.closeSurveyResults()">Voltar</button>`;
+  const filters = { perfil: res.perfil, regionId: res.regionId };
+  const sum = summarize(sv, res.responses, filters);
+  const bar = (n, total, color = '#2D6A2A') => `<div style="background:#e2e8f0;border-radius:999px;height:.55rem;flex:1;"><div style="background:${color};border-radius:999px;height:.55rem;width:${total ? Math.round(n / total * 100) : 0}%;"></div></div>`;
+  const qBlock = q => {
+    let body = '';
+    if (q.tipo === 'nota5') body = `<div style="font-size:1.6rem;font-weight:800;color:#166534;">${q.avg ?? '—'} <span style="font-size:.8rem;color:#64748b;font-weight:600;">média · ${q.answered} resposta(s)</span></div>
+      ${[5, 4, 3, 2, 1].map(n => `<div style="display:flex;align-items:center;gap:.5rem;font-size:.78rem;margin-top:.25rem;"><span style="width:1.6rem;">${n} ⭐</span>${bar(q.dist[n], q.answered)}<span style="width:2rem;text-align:right;">${q.dist[n]}</span></div>`).join('')}`;
+    else if (q.tipo === 'escolha') body = Object.entries(q.counts).map(([o, n]) => `<div style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;margin-top:.3rem;"><span style="flex:0 0 40%;overflow:hidden;text-overflow:ellipsis;">${escHtml(o)}</span>${bar(n, q.answered, '#0D2B6E')}<span style="width:2.2rem;text-align:right;">${n}</span></div>`).join('') || '<em style="color:#94a3b8;font-size:.8rem;">sem opções</em>';
+    else if (q.tipo === 'simnao') body = `<div style="font-size:1.4rem;font-weight:800;color:#166534;">${q.pctSim ?? '—'}${q.pctSim === null ? '' : '%'} <span style="font-size:.8rem;color:#64748b;font-weight:600;">disseram Sim · ${q.answered} resposta(s)</span></div>
+      <div style="display:flex;align-items:center;gap:.5rem;font-size:.78rem;margin-top:.3rem;"><span style="width:2.2rem;">Sim</span>${bar(q.sim, q.answered)}<span>${q.sim}</span></div>
+      <div style="display:flex;align-items:center;gap:.5rem;font-size:.78rem;margin-top:.3rem;"><span style="width:2.2rem;">Não</span>${bar(q.nao, q.answered, '#dc2626')}<span>${q.nao}</span></div>`;
+    else body = q.texts.length === 0 ? '<em style="color:#94a3b8;font-size:.8rem;">Nenhum comentário</em>'
+      : `<div style="display:flex;flex-direction:column;gap:.4rem;max-height:18rem;overflow:auto;">${q.texts.map(t => `<div style="background:#f8fafc;border-radius:.6rem;padding:.5rem .7rem;font-size:.82rem;color:#334155;">“${escHtml(t.texto)}” <span style="color:#94a3b8;font-size:.7rem;">— ${PROFILE_LABEL[t.perfil] || t.perfil}${t.regionId ? ' · ' + escHtml(rname(t.regionId)) : ''}</span></div>`).join('')}</div>`;
+    return `<div class="card" style="padding:1rem;overflow:visible;"><div style="font-weight:700;color:#1e293b;font-size:.9rem;margin-bottom:.5rem;">${escHtml(q.texto)}</div>${body}</div>`;
+  };
+  const sel = 'border:1.5px solid #e2e8f0;border-radius:.65rem;padding:.45rem .6rem;font-size:.82rem;background:#fff;';
+  return `
+  <div>
+    <button onclick="W.closeSurveyResults()" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:.85rem;padding:0;margin-bottom:.4rem;">← Voltar às pesquisas</button>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:.5rem;flex-wrap:wrap;margin-bottom:.6rem;">
+      <div><div style="font-weight:800;color:#1e293b;font-size:1.05rem;">📊 ${escHtml(sv.titulo)}</div>
+        <div style="font-size:.8rem;color:#64748b;"><b>${sum.total}</b> resposta(s)${res.perfil || res.regionId ? ` (filtradas, de ${res.responses.length})` : ''} · ${sv.aberta ? '🟢 aberta' : '⚪ fechada'}</div></div>
+      <div style="display:flex;gap:.4rem;"><button onclick="W.refreshSurveyResults()" style="background:#f1f5f9;border:none;border-radius:.65rem;padding:.5rem .8rem;font-size:.8rem;font-weight:700;cursor:pointer;">🔄 Atualizar</button>
+        <button onclick="W.exportSurveyCsv()" style="background:#6b21a8;color:#fff;border:none;border-radius:.65rem;padding:.5rem .8rem;font-size:.8rem;font-weight:700;cursor:pointer;">📄 CSV</button></div>
+    </div>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.8rem;">
+      <select onchange="W.setSurveyFilter('perfil',this.value)" style="${sel}"><option value="">Todos os perfis</option>${PROFILES.map(p => `<option value="${p}" ${res.perfil === p ? 'selected' : ''}>${PROFILE_LABEL[p]}</option>`).join('')}</select>
+      <select onchange="W.setSurveyFilter('regionId',this.value)" style="${sel}"><option value="">Todas as regiões</option>${S.regions.map(r => `<option value="${r.id}" ${res.regionId === r.id ? 'selected' : ''}>${escHtml(r.name)}</option>`).join('')}</select>
+    </div>
+    ${res.loading ? '<p style="color:#64748b;">Carregando respostas…</p>' : ''}
+    <div style="display:flex;flex-direction:column;gap:.625rem;">${sum.questions.map(qBlock).join('')}</div>
+  </div>`;
+}
+
+function mSurveyForm() {
+  const e = S.surveyEdit;
+  if (!e) return '';
+  const inp = 'width:100%;border:1.5px solid #e2e8f0;border-radius:.75rem;padding:.65rem;font-size:.88rem;outline:none;font-family:inherit;';
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this)W.closeModal()">
+    <div class="modal-content">
+      <div style="width:2.5rem;height:.25rem;background:#e2e8f0;border-radius:999px;margin:0 auto .875rem;"></div>
+      <h2 style="font-size:1.15rem;font-weight:800;color:#1e293b;margin:0 0 1rem;">${e.id ? 'Editar' : 'Nova'} pesquisa</h2>
+      <div style="display:flex;flex-direction:column;gap:.75rem;">
+        <div><label style="font-size:.8rem;font-weight:700;color:#374151;">Título *</label><input id="sv-titulo" value="${escHtml(e.titulo)}" style="${inp}"></div>
+        <label style="display:flex;gap:.5rem;align-items:center;font-size:.85rem;font-weight:600;"><input type="checkbox" id="sv-aberta" ${e.aberta ? 'checked' : ''}> Pesquisa aberta (visível para conselheiros, regiões e fiscais)</label>
+        ${e.id ? '<div style="font-size:.74rem;color:#92400e;background:#fffbeb;border-radius:.5rem;padding:.4rem .6rem;">⚠️ Se já há respostas, evite trocar o tipo de uma pergunta: respostas antigas podem deixar de aparecer nos resultados.</div>' : ''}
+        <div id="sv-perguntas" style="display:flex;flex-direction:column;gap:.6rem;">
+          ${e.perguntas.map((q, i) => `
+          <div class="sv-q" data-id="${escHtml(q.id)}" style="border:1.5px solid #e2e8f0;border-radius:.85rem;padding:.7rem;background:#fafafa;">
+            <div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.4rem;">
+              <b style="font-size:.8rem;color:#64748b;">${i + 1}.</b>
+              <select class="sv-tipo" onchange="W.surveyTypeChanged()" style="${inp}flex:1;">${QUESTION_TYPES.map(t => `<option value="${t}" ${q.tipo === t ? 'selected' : ''}>${TYPE_LABEL[t]}</option>`).join('')}</select>
+              <button onclick="W.moveSurveyQuestion(${i},-1)" style="border:none;background:#f1f5f9;border-radius:.5rem;padding:.35rem .5rem;cursor:pointer;">↑</button>
+              <button onclick="W.moveSurveyQuestion(${i},1)" style="border:none;background:#f1f5f9;border-radius:.5rem;padding:.35rem .5rem;cursor:pointer;">↓</button>
+              <button onclick="W.removeSurveyQuestion(${i})" style="border:none;background:#fef2f2;color:#ef4444;border-radius:.5rem;padding:.35rem .5rem;cursor:pointer;">🗑️</button>
+            </div>
+            <input class="sv-texto" value="${escHtml(q.texto)}" placeholder="Texto da pergunta" style="${inp}">
+            ${q.tipo === 'escolha' ? `<textarea class="sv-opcoes" rows="3" placeholder="Uma opção por linha (mínimo 2)" style="${inp}margin-top:.4rem;resize:vertical;">${escHtml((q.opcoes || []).join('\n'))}</textarea>` : ''}
+            <label style="display:flex;gap:.4rem;align-items:center;font-size:.78rem;margin-top:.4rem;color:#475569;"><input type="checkbox" class="sv-obrig" ${q.obrigatoria ? 'checked' : ''}> Obrigatória</label>
+          </div>`).join('')}
+        </div>
+        <button onclick="W.addSurveyQuestion()" style="background:#f1f5f9;border:none;border-radius:.75rem;padding:.65rem;font-weight:700;cursor:pointer;">+ Adicionar pergunta</button>
+        <button onclick="W.saveSurvey()" ${S.loading ? 'disabled' : ''} style="background:#0D2B6E;color:#fff;border:none;padding:1rem;border-radius:1rem;font-size:1rem;font-weight:800;cursor:pointer;opacity:${S.loading ? .6 : 1};">${S.loading ? '⏳ Salvando…' : '💾 Salvar pesquisa'}</button>
+      </div>
+      <button onclick="W.closeModal()" style="width:100%;margin-top:.5rem;padding:.8rem;background:none;border:none;color:#9ca3af;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+}
+
+// lê o formulário aberto para S.surveyEdit (antes de qualquer re-render)
+function readSurveyForm() {
+  const e = S.surveyEdit; if (!e || !document.getElementById('sv-titulo')) return;
+  e.titulo = document.getElementById('sv-titulo').value;
+  e.aberta = document.getElementById('sv-aberta').checked;
+  e.perguntas = [...document.querySelectorAll('#sv-perguntas .sv-q')].map(el => ({
+    id: el.dataset.id, tipo: el.querySelector('.sv-tipo').value, texto: el.querySelector('.sv-texto').value,
+    opcoes: (el.querySelector('.sv-opcoes')?.value || '').split('\n').map(x => x.trim()).filter(Boolean),
+    obrigatoria: el.querySelector('.sv-obrig').checked
+  }));
+}
+const newQuestion = () => ({ id: `q${Date.now().toString(36)}${Math.floor(Math.random() * 99)}`, tipo: 'nota5', texto: '', opcoes: [], obrigatoria: false });
 
 // ── TAB: REQUISITOS ───────────────────────────────────────────
 function tReqs() {
@@ -1443,6 +1571,7 @@ window.W = {
     if (_unsubParticipants) _unsubParticipants();
     if (_unsubUnits)        _unsubUnits();
     if (_unsubDiscipline)   _unsubDiscipline();
+    if (_unsubSurveys)      _unsubSurveys();
     authLogout();
   },
 
@@ -1839,6 +1968,55 @@ window.W = {
       await refreshUsers();
     } catch (e) { toast(e.message || 'Erro ao vincular.', 'error'); }
     S.loading = false; render();
+  },
+
+  // ── Pesquisa de Satisfação ─────────────────────────────────
+  openSurveyForm(id) {
+    const sv = id ? S.surveys.find(x => x.id === id) : null;
+    S.surveyEdit = sv ? JSON.parse(JSON.stringify({ id: sv.id, titulo: sv.titulo, aberta: sv.aberta, perguntas: sv.perguntas })) : { titulo: '', aberta: false, perguntas: [newQuestion()] };
+    S.modal = 'survey-form'; render();
+  },
+  addSurveyQuestion() { readSurveyForm(); S.surveyEdit.perguntas.push(newQuestion()); render(); },
+  removeSurveyQuestion(i) { readSurveyForm(); S.surveyEdit.perguntas.splice(i, 1); render(); },
+  moveSurveyQuestion(i, d) { readSurveyForm(); const a = S.surveyEdit.perguntas, j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; render(); },
+  surveyTypeChanged() { readSurveyForm(); render(); },
+  async saveSurvey() {
+    readSurveyForm();
+    const e = S.surveyEdit;
+    S.loading = true; render();
+    try {
+      if (e.id) await updateSurvey(e.id, e); else await createSurvey(e);
+      toast('Pesquisa salva! ✅'); S.modal = null; S.surveyEdit = null;
+    } catch (err) { toast(err.message || 'Erro ao salvar a pesquisa.', 'error'); }
+    S.loading = false; render();
+  },
+  async toggleSurvey(id) {
+    const sv = S.surveys.find(x => x.id === id); if (!sv) return;
+    try { await updateSurvey(id, { ...sv, aberta: !sv.aberta }); toast(sv.aberta ? 'Pesquisa fechada.' : 'Pesquisa aberta! 🟢', 'info'); } catch (err) { toast(err.message, 'error'); }
+  },
+  async createSampleSurvey() { try { await createSampleSurvey(); toast('Pesquisa de exemplo criada (fechada). Revise e abra quando quiser.', 'info'); } catch (err) { toast(err.message, 'error'); } },
+  async deleteSurvey(id) {
+    if (!confirm('Excluir esta pesquisa? (Só é possível se ela ainda não tem respostas.)')) return;
+    try { await apiDeleteSurvey(id); toast('Pesquisa excluída.', 'info'); } catch (err) { toast(err.message, 'error'); }
+  },
+  async openSurveyResults(id) { S.surveyResults = { surveyId: id, responses: [], perfil: '', regionId: '', loading: true }; render(); await W.refreshSurveyResults(); },
+  closeSurveyResults() { S.surveyResults = null; render(); },
+  async refreshSurveyResults() {
+    const r = S.surveyResults; if (!r) return;
+    r.loading = true; render();
+    try { r.responses = await fetchSurveyResponses(r.surveyId); } catch (err) { toast(err.message || 'Erro ao carregar as respostas.', 'error'); }
+    r.loading = false; render();
+  },
+  setSurveyFilter(k, v) { if (S.surveyResults) { S.surveyResults[k] = v; render(); } },
+  exportSurveyCsv() {
+    const r = S.surveyResults, sv = r && S.surveys.find(x => x.id === r.surveyId); if (!sv) return;
+    const rows = filterResponses(r.responses, { perfil: r.perfil, regionId: r.regionId });
+    if (!rows.length) { toast('Nenhuma resposta para exportar.', 'error'); return; }
+    const csv = buildSurveyCsv(sv, rows, { regionName: rname, fmtDateTime: ms => (ms ? new Date(ms).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '') });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    a.download = `pesquisa-satisfacao-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
   },
 
   // ── Disciplina ─────────────────────────────────────────────

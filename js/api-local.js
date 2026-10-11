@@ -320,3 +320,16 @@ export async function createDisciplinaryAction(data, currentUser) {
   }
 }
 export const deleteDisciplinaryAction = id => apiFetch(`/discipline/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+// ── PESQUISA DE SATISFAÇÃO (sem pontos, anônima, isolada da pontuação) ─────────────────────
+// Servidor local: o PERFIL e a região vêm do token no servidor — o app não manda (nem o servidor grava) identidade.
+export const subOpenSurveys = onUpdate => listen(() => apiFetch('/surveys/open'), d => d, onUpdate, 'pesquisa');
+export const subSurveys = onUpdate => listen(listDocs('surveys'), d => d.sort((a, b) => (b.criadoEm?.seconds || 0) - (a.criadoEm?.seconds || 0)), onUpdate, 'pesquisas');
+export async function createSurvey(data) { return (await apiFetch('/surveys', { method: 'POST', body: data })).id; }
+export async function createSampleSurvey() { return (await apiFetch('/surveys/sample', { method: 'POST' })).id; }
+export async function updateSurvey(id, data) { await apiFetch(`/surveys/${encodeURIComponent(id)}`, { method: 'PATCH', body: data }); }
+export async function deleteSurvey(id) { await apiFetch(`/surveys/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
+export async function fetchSurveyResponses(surveyId) { return revive(await apiFetch(`/surveys/${encodeURIComponent(surveyId)}/responses`)); }
+export async function submitSurveyResponse({ surveyId, clientId, answers }) {
+  return apiFetch(`/surveys/${encodeURIComponent(surveyId)}/responses`, { method: 'POST', body: { clientId, answers } });
+}

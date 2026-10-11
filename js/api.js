@@ -6,6 +6,7 @@ import { CLOUD_URL, TIMEOUTS, LOCAL_APP } from './config.js';
 import { resolveProof } from '../shared/proof.js';
 import { fetchJson, serverFetch, HttpError, NetError } from './net.js';
 import { normalizeUniformInspection, computeUniformPoints } from '../shared/uniforme.js';
+import { validateSurveyDef, responseDocId, SAMPLE_SURVEY } from '../shared/survey.js';
 import { reqFilledBy, computeUnitScores, computeStars, findQrDuplicate, DISCIPLINE_POINTS } from '../shared/scoring.js';
 
 // Regras de pontuação vivem em shared/scoring.js (também usado pelo servidor local offline)
@@ -570,4 +571,44 @@ export async function createDisciplinaryAction(data, currentUser) {
 
 export async function deleteDisciplinaryAction(id) {
   await deleteDoc(doc(db, 'disciplinaryActions', id));
+}
+
+// ── PESQUISA DE SATISFAÇÃO (sem pontos, anônima, isolada da pontuação) ─────────────────────
+// Nuvem (Firestore). A resposta guarda SÓ perfil/regionId (nunca userId/nome); id do documento = resp_<pesquisa>_<clientId>,
+// então reenviar ou editar com o mesmo clientId SUBSTITUI. (Regras do Firestore: ver firestore.rules.)
+const mapDocs = snap => snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+export function subOpenSurveys(onUpdate) {
+  const q = query(collection(db, 'surveys'), where('aberta', '==', true));
+  return onSnapshot(q, snap => onUpdate(mapDocs(snap).map(({ id, titulo, perguntas }) => ({ id, titulo, perguntas }))),
+    err => toast('Erro ao carregar a pesquisa: ' + err.message, 'error'));
+}
+export function subSurveys(onUpdate) {
+  return onSnapshot(collection(db, 'surveys'), snap => onUpdate(mapDocs(snap).sort((a, b) => (b.criadoEm?.seconds || 0) - (a.criadoEm?.seconds || 0))),
+    err => toast('Erro ao carregar pesquisas: ' + err.message, 'error'));
+}
+export async function createSurvey(data) {
+  const v = validateSurveyDef(data);
+  if (!v.ok) throw new Error(v.errors[0]);
+  return (await addDoc(collection(db, 'surveys'), { ...v.value, criadoEm: serverTimestamp() })).id;
+}
+export const createSampleSurvey = () => createSurvey(SAMPLE_SURVEY);
+export async function updateSurvey(id, data) {
+  const v = validateSurveyDef(data);
+  if (!v.ok) throw new Error(v.errors[0]);
+  await updateDoc(doc(db, 'surveys', id), v.value);
+}
+export async function deleteSurvey(id) {
+  const used = await getDocs(query(collection(db, 'surveyResponses'), where('surveyId', '==', id)));
+  if (used.docs.length) throw new Error('Esta pesquisa já tem respostas — feche-a em vez de apagar.');
+  await deleteDoc(doc(db, 'surveys', id));
+}
+export async function fetchSurveyResponses(surveyId) {
+  return mapDocs(await getDocs(query(collection(db, 'surveyResponses'), where('surveyId', '==', surveyId))));
+}
+export async function submitSurveyResponse({ surveyId, clientId, answers, perfil, regionId = null, isEdit = false }) {
+  const id = responseDocId(surveyId, clientId);
+  const base = { surveyId, clientId, perfil, ...(regionId ? { regionId } : {}), answers };
+  await setDoc(doc(db, 'surveyResponses', id), isEdit ? { ...base, editadoEm: serverTimestamp() } : { ...base, criadoEm: serverTimestamp() }, { merge: isEdit });
+  return { id, result: isEdit ? 'updated' : 'created' };
 }

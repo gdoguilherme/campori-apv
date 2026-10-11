@@ -148,7 +148,7 @@ test('painel traz o botão "Atualizar dados da nuvem": /status/api/pull-now só 
     assert.equal(env.store.get('requirements', 'RA').points, 77);
     assert.equal(env.fake.get('participants', 'p-pend'), null, 'pull-now não envia');
     const d = r.json.summary;
-    assert.equal(d.pull.listening, true); assert.ok(d.pull.lastPullAt); assert.equal(d.pull.ready, 7);
+    assert.equal(d.pull.listening, true); assert.ok(d.pull.lastPullAt); assert.equal(d.pull.ready, 9);   // 7 + pesquisas e respostas
     assert.equal(d.sync.pending, 1);
     env.fake.online = false;
     const off = await s.call('POST', '/status/api/pull-now');

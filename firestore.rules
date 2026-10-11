@@ -55,6 +55,16 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Pesquisa de Satisfação (sem pontos, anônima, isolada da pontuação) — modo NUVEM (navegador grava direto no Firestore).
+    // Mesmo nível de acesso das demais (aberto, sem Firebase Auth no app). O servidor local usa o Firebase Admin e ignora estas regras.
+    // PASSO MANUAL: copie estes dois blocos para o Console do Firebase (Firestore → Regras) ANTES de usar a pesquisa em modo nuvem.
+    match /surveys/{surveyId} {
+      allow read, write: if true;
+    }
+    match /surveyResponses/{responseId} {
+      allow read, write: if true;
+    }
+
     // Se o Console mostrar outras coleções além destas, adicione um bloco
     // `match /nomeDaColecao/{id} { allow read, write: if true; }` para cada uma
     // ANTES de publicar — não reintroduza o catch-all `{document=**}`.

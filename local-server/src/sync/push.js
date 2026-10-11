@@ -99,6 +99,8 @@ async function pushGeneric({ cloud }, col, row) {
 
     if (row.deleted) {
       if (!cloudDoc) return { outcome: 'deleted', hardDelete: true };
+      // respostas da pesquisa só ACRESCENTAM: uma exclusão local nunca apaga a resposta da nuvem
+      if (col === 'surveyResponses') return { outcome: 'delete-lost', doc: cloudDoc };
       const unchanged = row.base && deepEqual(cloudDoc, row.base);
       // disciplina e auditoria: exclusão vence sempre; demais: só se a nuvem não mudou desde que este PC viu
       if (col === 'disciplinaryActions' || col === 'auditLog' || unchanged) { tx.delete(ref); return { outcome: 'deleted', hardDelete: true }; }

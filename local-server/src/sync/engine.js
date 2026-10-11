@@ -8,7 +8,7 @@ import { pushRow, readCloudDoc } from './push.js';
 import { createPuller } from './pull.js';
 
 // ordem de envio: dados de referência → submissões (scans por scanTimestamp) → disciplina → auditoria
-const PUSH_ORDER = ['requirements', 'regions', 'units', 'participants', 'users', 'submissions', 'disciplinaryActions', 'auditLog'];
+const PUSH_ORDER = ['requirements', 'regions', 'units', 'participants', 'users', 'submissions', 'disciplinaryActions', 'auditLog', 'surveys', 'surveyResponses'];
 const ROW_TIMEOUT_MS = 20_000;
 const MAX_ROW_ATTEMPTS = 3, ROW_COOLDOWN_MS = 5 * 60_000;      // item que falha por motivo próprio não trava os outros
 const BACKOFF_MS = [10_000, 20_000, 40_000, 60_000];           // teto de 60s: a volta da Starlink é percebida em ≤1 min

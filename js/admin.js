@@ -311,9 +311,14 @@ function tReqs() {
   return `
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.875rem;">
     <span style="font-weight:800;color:#1e293b;">Requisitos (${S.requirements.length})</span>
-    <button onclick="W.openReqForm(null)"
-      style="background:#0D2B6E;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Novo</button>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
+      ${isAdmin() ? `<a href="/pages/qrcodes.html" target="_blank" rel="noopener" title="Abre a página de impressão com os QR Codes de todas as provas"
+        style="background:#166534;color:#fff;text-decoration:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;">🔲 QR Codes (todos)</a>` : ''}
+      <button onclick="W.openReqForm(null)"
+        style="background:#0D2B6E;color:#fff;border:none;padding:.5rem 1rem;border-radius:.75rem;font-size:.85rem;font-weight:700;cursor:pointer;">+ Novo</button>
+    </div>
   </div>
+  ${isAdmin() ? `<div style="font-size:.74rem;color:#92400e;background:#fffbeb;border-radius:.6rem;padding:.4rem .6rem;margin:-.4rem 0 .75rem;">⚠️ Imprima os QR Codes só depois de cadastrar os requisitos reais: trocar requisito, variante ou pontos depois invalida o QR já impresso.</div>` : ''}
   ${S.requirements.length === 0
     ? `<div style="text-align:center;padding:3rem 1rem;color:#94a3b8;"><div style="font-size:3rem;">📝</div><p style="font-weight:600;">Nenhum requisito cadastrado</p></div>`
     : `<div style="display:flex;flex-direction:column;gap:.625rem;">

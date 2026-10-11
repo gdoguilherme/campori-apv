@@ -135,7 +135,8 @@ function subItemDetails(sub) {
 function render() {
   const el = document.getElementById('app');
   if (!el) return;
-  if (S.modal === 'survey-form') readSurveyForm();   // dados novos chegando não podem apagar o que o admin está digitando
+  if (S.modal === 'survey-form' && !S.surveyNoRead) readSurveyForm();   // dados novos chegando não podem apagar o que o admin está digitando
+  S.surveyNoRead = false;
   let html = vAdmin();
   if (S.modal === 'req-form')            html += mReqForm();
   else if (S.modal === 'user-form')      html += mUserForm();
@@ -1976,9 +1977,9 @@ window.W = {
     S.surveyEdit = sv ? JSON.parse(JSON.stringify({ id: sv.id, titulo: sv.titulo, aberta: sv.aberta, perguntas: sv.perguntas })) : { titulo: '', aberta: false, perguntas: [newQuestion()] };
     S.modal = 'survey-form'; render();
   },
-  addSurveyQuestion() { readSurveyForm(); S.surveyEdit.perguntas.push(newQuestion()); render(); },
-  removeSurveyQuestion(i) { readSurveyForm(); S.surveyEdit.perguntas.splice(i, 1); render(); },
-  moveSurveyQuestion(i, d) { readSurveyForm(); const a = S.surveyEdit.perguntas, j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; render(); },
+  addSurveyQuestion() { readSurveyForm(); S.surveyEdit.perguntas.push(newQuestion()); S.surveyNoRead = true; render(); },
+  removeSurveyQuestion(i) { readSurveyForm(); S.surveyEdit.perguntas.splice(i, 1); S.surveyNoRead = true; render(); },
+  moveSurveyQuestion(i, d) { readSurveyForm(); const a = S.surveyEdit.perguntas, j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; S.surveyNoRead = true; render(); },
   surveyTypeChanged() { readSurveyForm(); render(); },
   async saveSurvey() {
     readSurveyForm();

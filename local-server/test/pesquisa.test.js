@@ -251,6 +251,7 @@ test('front: aba do admin, botão nos portais (só com pesquisa aberta), formul�
   const admin = read('js/admin.js');
   assert.match(admin, /\{ id: 'survey', +label: '📝 Pesquisa' \}/); assert.match(admin, /S\.adminTab === 'survey' +&& isAdmin\(\)/);
   assert.match(admin, /isAdmin\(\)\) _unsubSurveys = subSurveys/, 'só admin carrega pesquisas/resultados');
+  for (const fn of ['addSurveyQuestion', 'removeSurveyQuestion', 'moveSurveyQuestion']) assert.match(admin.split(`${fn}(`)[1].split('\n')[0], /S\.surveyNoRead = true; render\(\)/, `${fn}: o re-render não pode reler o formulário e desfazer a alteração`);
   for (const f of ['js/conselheiro.js', 'js/regiao.js', 'js/fiscal.js']) { assert.match(read(f), /import \{ mountSurveyButton \}/, f); assert.match(read(f), /mountSurveyButton\(\{/, f); }
   const btn = read('js/surveyButton.js');
   assert.match(btn, /📝 Pesquisa de Satisfação/); assert.match(btn, /a\.hidden = !\(list && list\.length\)/, 'some quando não há pesquisa aberta'); assert.match(btn, /getCachedOpenSurveys/, 'aparece offline');

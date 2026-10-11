@@ -333,3 +333,8 @@ export async function fetchSurveyResponses(surveyId) { return revive(await apiFe
 export async function submitSurveyResponse({ surveyId, clientId, answers }) {
   return apiFetch(`/surveys/${encodeURIComponent(surveyId)}/responses`, { method: 'POST', body: { clientId, answers } });
 }
+
+// ── EXTRATO DE PONTOS POR UNIDADE ──────────────────────────────────────────────────────────
+// Servidor local: calculado no servidor (mesma seleção do ranking) e com a permissão checada lá (403 fora do escopo).
+export const fetchUnitStatement = unitId => apiFetch(`/scores/units/${encodeURIComponent(unitId)}/statement`);
+export const fetchStatements = () => apiFetch('/scores/statements');

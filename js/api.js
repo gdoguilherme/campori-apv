@@ -7,6 +7,7 @@ import { resolveProof } from '../shared/proof.js';
 import { fetchJson, serverFetch, HttpError, NetError } from './net.js';
 import { normalizeUniformInspection, computeUniformPoints } from '../shared/uniforme.js';
 import { validateSurveyDef, responseDocId, SAMPLE_SURVEY } from '../shared/survey.js';
+import { buildUnitStatement, buildStatements } from '../shared/extrato.js';
 import { reqFilledBy, computeUnitScores, computeStars, findQrDuplicate, DISCIPLINE_POINTS } from '../shared/scoring.js';
 
 // Regras de pontuação vivem em shared/scoring.js (também usado pelo servidor local offline)
@@ -611,4 +612,27 @@ export async function submitSurveyResponse({ surveyId, clientId, answers, perfil
   const base = { surveyId, clientId, perfil, ...(regionId ? { regionId } : {}), answers };
   await setDoc(doc(db, 'surveyResponses', id), isEdit ? { ...base, editadoEm: serverTimestamp() } : { ...base, criadoEm: serverTimestamp() }, { merge: isEdit });
   return { id, result: isEdit ? 'updated' : 'created' };
+}
+
+// ── EXTRATO DE PONTOS POR UNIDADE ──────────────────────────────────────────────────────────
+// Nuvem: calcula no navegador com shared/extrato.js (a MESMA seleção do ranking). O Firestore do app não tem login, então aqui o
+// escopo (região/conselheiro) é aplicado no cliente; o servidor local aplica no servidor (GET /scores/units/:id/statement).
+async function statementData() {
+  const read = async c => mapDocs(await getDocs(collection(db, c)));
+  const [units, regions, submissions, disciplinaryActions, requirements] = await Promise.all(['units', 'regions', 'submissions', 'disciplinaryActions', 'requirements'].map(read));
+  return { units, regions, submissions, disciplinaryActions, requirements };
+}
+const stViewer = role => (role === 'superadmin' || role === 'admin' ? 'admin' : role === 'region' ? 'region' : 'counselor');
+const stCanSee = (user, unit) => ['superadmin', 'admin'].includes(user?.role) || (user?.role === 'region' && !!user.regionId && unit.regionId === user.regionId) || (user?.role === 'counselor' && !!user.unitId && unit.id === user.unitId);
+export async function fetchUnitStatement(unitId, user) {
+  const d = await statementData();
+  const unit = d.units.find(u => u.id === unitId);
+  if (!unit || !stCanSee(user, unit)) throw new Error('Sem permissão para ver o extrato desta unidade');
+  return buildUnitStatement(unitId, d, { viewer: stViewer(user.role) });
+}
+export async function fetchStatements(user) {
+  if (!['superadmin', 'admin', 'region'].includes(user?.role)) throw new Error('Sem permissão');
+  const d = await statementData();
+  const ids = d.units.filter(u => user.role !== 'region' || u.regionId === user.regionId).map(u => u.id);
+  return buildStatements(ids, d, { viewer: stViewer(user.role) });
 }

@@ -1,7 +1,7 @@
 import { guardPage, logout as authLogout, saveSession, getToken, startExpiryWatcher } from './auth.js';
 import {
   rname, toast, showBanner, updatePassword, addSubmission, uploadFile, updateSubmissionProof, reqFilledBy,
-  renderAnonRanking, setRegionCache
+  renderAnonRanking, setRegionCache, fetchUnitStatement
 } from './api.js';
 import { isDeadlinePassed, computeUnitBreakdown } from '../shared/scoring.js';
 import { evaluateOfflineScan, counselorPortalTotals } from '../shared/sync.js';
@@ -11,6 +11,8 @@ import { isPersistent, requestPersistence } from './offlineDb.js';
 import { rankingStampHtml } from './ranking.js';
 import { mountPortalBar } from './portalBar.js';
 import { mountSurveyButton } from './surveyButton.js';
+import { openExtrato } from './extrato.js';
+import { buildUnitStatement } from '../shared/extrato.js';
 import {
   STATUS, listQueue, enqueueScan, syncNow, refreshSnapshot, loadSnapshot, clearSnapshot,
   startAutoSync, onQueueChange, onAutoSyncResult, getSyncState
@@ -32,6 +34,7 @@ const S = {
   participants: [],
   requirements: [],
   submissions: [],     // submissions da unidade (confirmadas pelo servidor)
+  region: null,
   inspectionRequirements: [], // Inspeção de uniforme (pontua só a unidade; avaliada pelo Fiscal)
   regionRequirements: [], // requisitos que valem para toda a região (Regional / Só Fiscal), da modalidade dela
   regionSubmissions: [],  // submissões no nível da região (sem unitId): pontuam TODAS as unidades da região
@@ -93,6 +96,7 @@ function applySnapshot(snap) {
   S.snapshot = snap;
   const d = snap?.data;
   S.unit = d?.unit || null;
+  S.region = d?.region || null;
   S.participants = d?.participants || [];
   S.requirements = d?.requirements || [];
   S.submissions = d?.submissions || [];
@@ -205,6 +209,9 @@ function vPortal() {
         </div>
         <div style="display:flex;gap:.5rem;align-items:center;">
           <img src="/assets/logo-apv.png" alt="APV" style="height:1.3rem;width:auto;object-fit:contain;opacity:.85;">
+          <button onclick="W.openExtrato()"
+            style="background:rgba(0,0,0,.2);border:none;color:rgba(255,255,255,.9);
+            padding:.375rem .7rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">📄 Extrato</button>
           <button onclick="W.openChangePwd()"
             style="background:rgba(0,0,0,.2);border:none;color:rgba(255,255,255,.8);
             padding:.375rem .7rem;border-radius:.625rem;font-size:.8rem;cursor:pointer;">🔑</button>
@@ -741,6 +748,24 @@ function mChangePassword() {
 
 // ── ACTIONS ───────────────────────────────────────────────────
 window.W = {
+  // Extrato SÓ da unidade do conselheiro: online vem do servidor (que recusa qualquer outra unidade); sem rede, é montado com o
+  // snapshot guardado no celular (mesma função e mesmos números do portal).
+  openExtrato() {
+    const unitId = S.user?.unitId;
+    if (!unitId) { toast('Sem unidade vinculada a este login.', 'error'); return; }
+    const fromSnapshot = () => {
+      if (!S.snapshot || !S.unit) throw new Error('Sem dados baixados neste aparelho. Conecte-se ao servidor ao menos uma vez.');
+      const regionId = S.unit.regionId;
+      return buildUnitStatement(unitId, {
+        units: [S.unit], regions: S.region ? [S.region] : [], requirements: [...S.requirements, ...S.regionRequirements, ...S.inspectionRequirements],
+        submissions: [...S.submissions.map(x => ({ ...x, regionId })), ...S.regionSubmissions], disciplinaryActions: S.disciplinary.map(d => ({ ...d, reason: '' })),
+      }, { viewer: 'counselor' });
+    };
+    openExtrato({
+      unitId, title: 'Extrato de pontos da minha unidade',
+      loadUnit: async id => { try { return await fetchUnitStatement(id, S.user); } catch (e) { if (e?.status === 403) throw e; return fromSnapshot(); } },
+    });
+  },
   // Sair: a sessão é limpa, mas a FILA de scans pendentes fica no aparelho (IndexedDB)
   // e é enviada quando a pessoa entrar de novo. Se há pendentes, pede confirmação antes.
   logout() {

@@ -89,6 +89,15 @@
     <div class="msg" id="backupMsg" style="margin-top:12px"></div>
   </section>
 
+  <section class="card" id="qrCard">
+    <h3>🔲 QR Codes das provas</h3>
+    <div><b id="qrCount">0</b> gerado(s) · <span id="qrWhen" class="small">ainda não gerados</span></div>
+    <div class="small" id="qrDir" style="margin-top:4px"></div>
+    <div class="msg warn" id="qrWarn" style="margin-top:10px"></div>
+    <div class="toolbar" style="margin-top:12px"><button id="btnQr" class="alt">🔲 Gerar QR Codes</button><span class="small">PNG de cada QR + TODOS-OS-QRCODES.pdf (6 por página)</span></div>
+    <div class="msg" id="qrMsg" style="margin-top:12px"></div>
+  </section>
+
   <section class="card" id="uploadsCard">
     <h3>📷 Fotos / comprovações</h3>
     <div><b id="upCount">0</b> arquivo(s) · <b id="upSize">0 B</b> em <span class="small" id="upDir"></span></div>
@@ -157,6 +166,15 @@
       $('opsNums').innerHTML = nums.map(function (n) { return '<div class="num"><b style="font-size:1.35rem">' + esc(n[1]) + '</b><span>' + esc(n[0]) + '</span></div>'; }).join('');
       $('backupInfo').textContent = o.backup ? 'Último backup automático: ' + ago(o.backup.lastAt) + ' (' + o.backup.count + ' guardados em backups/)' : 'Ainda não há backup em backups/';
     }
+    if (d.qrcodes) {
+      var q = d.qrcodes, w = [];
+      $('qrCount').textContent = q.count; $('qrWhen').textContent = q.generated ? 'gerados em ' + fmt(q.generatedAt) + ' (' + ago(q.generatedAt) + ')' : 'ainda não gerados (há ' + q.currentCount + ' QR a gerar)';
+      $('qrDir').textContent = q.generated ? 'Pasta: ' + q.dir : '';
+      if (q.requirementsChanged) w.push('Os requisitos/variantes/pontos MUDARAM depois da geração — gere de novo e reimprima.');
+      if (q.secretChanged) w.push('O QR_SECRET mudou depois da geração — os QR já impressos NÃO valem mais.');
+      w.push(q.warning);
+      $('qrWarn').className = 'msg warn'; $('qrWarn').textContent = '⚠️ ' + w.join(' ');
+    }
     if (d.uploads) { $('upCount').textContent = d.uploads.count; $('upSize').textContent = d.uploads.size; $('upDir').textContent = d.uploads.dir; $('upWarn').className = 'msg warn'; $('upWarn').textContent = '⚠️ ' + d.uploads.warning; }
     $('alertsCard').style.display = d.alerts.length ? 'block' : 'none';
     $('alertsList').innerHTML = d.alerts.map(function (a) { return '<li>' + esc(a.message) + ' <span class="small">(' + fmt(a.ts) + ')</span></li>'; }).join('');
@@ -191,6 +209,17 @@
   }
   $('btnSync').onclick = function () { runSync('sync-now', $('btnSync'), '⏳ Sincronizando…', '🔄 Sincronizar agora'); };
   $('btnPull').onclick = function () { runSync('pull-now', $('btnPull'), '⏳ Atualizando…', '⬇️ Atualizar dados da nuvem'); };
+  $('btnQr').onclick = function () {
+    var box = $('qrMsg'), btn = $('btnQr'); btn.disabled = true; btn.textContent = '⏳ Gerando…'; box.className = 'msg';
+    api('gerar-qrcodes', { method: 'POST', body: '{}' }).then(function (r) {
+      var b = r.body;
+      if (r.status !== 200) { box.className = 'msg err'; box.textContent = '❌ ' + (b.error || 'erro ' + r.status); }
+      else if (!b.ok) { box.className = 'msg err'; box.textContent = '❌ ' + b.message; }
+      else { box.className = 'msg ok'; box.textContent = '✅ ' + b.message; }
+      if (b.summary) render(b.summary); else load();
+    }).catch(function () { box.className = 'msg err'; box.textContent = '❌ Não consegui falar com o servidor.'; })
+      .then(function () { btn.disabled = false; btn.textContent = '🔲 Gerar QR Codes'; });
+  };
   $('btnBackup').onclick = function () {
     var box = $('backupMsg'), btn = $('btnBackup'); btn.disabled = true; btn.textContent = '⏳ Gerando…'; box.className = 'msg';
     fetch('/status/api/backup', { headers: { 'X-Status-Pin': pin } }).then(function (r) {

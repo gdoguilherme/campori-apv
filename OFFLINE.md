@@ -298,3 +298,10 @@ conta **uma vez** (ranking, bootstrap e portal iguais; `dedupeDisciplinaryAction
 `/status` (contagens, disco, certificado, backup) + `GET /status/api/backup`; `npm run preflight`; `npm run resetar-eventos-de-teste`; `npm run backup-uploads`; `npm run dbtool`. Detalhes e passo a passo em `local-server/GUIA-WINDOWS.md` (Parte 3).
 
 **Limitações conhecidas:** fotos só no PC; sem internet o 1º acesso/instalação de um aparelho novo não acontece; iOS < 16.4 / Chrome < 89 não usam o modo local; a inspeção só pontua após aprovação; mudanças de código chegam aos celulares via *Atualizar app*.
+
+
+### QR Codes em lote
+`shared/qrsheet.js` (todas as variantes das provas ativas, nomes de arquivo, impressão digital do conjunto) + `shared/pdf.js` (PDF A4 de 6 cartões, sem dependências, navegador e Node).
+- **Admin** (só admin): Requisitos → `🔲 QR Codes (todos)` → `pages/qrcodes.html` (grade 2×3, QR de 6,2 cm, progresso "N de M" em lotes de 6, Imprimir / Baixar PDF; payloads só em memória; usa `/qr/generate`, local e nuvem).
+- **Servidor local:** `npm run gerar-qrcodes [destino]` (`src/qrcodes.js`) grava PNG por QR + `TODOS-OS-QRCODES.pdf` + `manifest.json` em `data/qrcodes/`; hash = `signQr` do servidor com o `QR_SECRET` atual; `/status` mostra contagem, data e avisos (requisitos ou segredo mudaram).
+- **Regra:** imprimir só depois de cadastrar os requisitos reais — trocar requisito/variante/pontos (ou `QR_SECRET`) invalida o QR impresso. Testes decodificam cada PNG/PDF e resgatam no `/qr/redeem`.

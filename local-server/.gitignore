@@ -13,6 +13,7 @@ certs/
 
 # ── dados do evento, logs e backups (contêm dados pessoais) ────────────────
 data/
+data/qrcodes/
 logs/
 backups/
 node_modules/

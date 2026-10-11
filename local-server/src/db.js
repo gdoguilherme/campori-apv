@@ -18,6 +18,9 @@ export const INDEXED = {
   disciplinaryActions: ['targetType', 'targetId'],
   auditLog: ['submissionId'],
   users: ['username', 'role', 'regionId', 'unitId'], // hash de senha só trafega via /users/login
+  // Pesquisa de Satisfação — ISOLADA da pontuação (nenhum cálculo de ranking/pontos lê estas coleções); respostas anônimas
+  surveys: ['aberta'],
+  surveyResponses: ['surveyId', 'perfil', 'regionId', 'clientId'],
 };
 export const COLLECTIONS = Object.keys(INDEXED);
 

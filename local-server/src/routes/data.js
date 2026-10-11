@@ -14,6 +14,8 @@ const WRITE_ROLES = {
   submissions: ADMIN_ROLES,   // envio/avaliação/QR: POST /submissions, /qr/redeem etc.; região/conselheiro só PATCH proofUrl (abaixo)
   disciplinaryActions: [],    // só via POST/DELETE /discipline (pontos fixos em 5)
   auditLog: [],               // escrito pelo servidor
+  surveys: [],                // só via /surveys (validação e permissão próprias)
+  surveyResponses: [],        // só via POST /surveys/:id/responses (anônimas) — leitura: só admin
 };
 
 export function dataRouter({ store, auth }) {
@@ -27,6 +29,7 @@ export function dataRouter({ store, auth }) {
 
   r.get('/:col', requireAuth(), (req, res) => {
     const { col } = req.params;
+    if (col === 'surveyResponses' && !ADMIN_ROLES.includes(req.user.role)) throw httpError(403, 'Sem permissão');
     const { since, ...q } = req.query;
     const filters = {};
     for (const [k, v] of Object.entries(q)) if (INDEXED[col].includes(k)) filters[k] = v === 'null' ? null : v;
@@ -35,6 +38,7 @@ export function dataRouter({ store, auth }) {
   });
 
   r.get('/:col/:id', requireAuth(), (req, res) => {
+    if (req.params.col === 'surveyResponses' && !ADMIN_ROLES.includes(req.user.role)) throw httpError(403, 'Sem permissão');
     const doc = store.get(req.params.col, req.params.id);
     if (!doc) throw httpError(404, 'Documento não encontrado');
     res.json(doc);

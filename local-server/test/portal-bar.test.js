@@ -5,10 +5,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
-import { createRequire } from 'node:module';
+import { createRequire, register } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { startTestServer, seedScenario } from './helpers.js';
 import { REPO_ROOT } from '../src/config.js';
 import { createPageInjector } from '../src/html-inject.js';
+
+// portalBar.js agora importa a fila da pesquisa (→ api.js → Firestore): no teste, o Firestore é o simulado
+const FAKE = pathToFileURL(path.resolve(REPO_ROOT, 'local-server/test/fake-firebase-capture.js')).href;
+register('data:text/javascript,' + encodeURIComponent(`export async function resolve(s, c, n) { return n(s === './firebase.js' ? ${JSON.stringify(FAKE)} : s, c); }`));
 
 let t;
 before(async () => { globalThis.location = { hostname: 'x', port: '', origin: 'http://x' }; globalThis.localStorage = { getItem: () => null }; t = await startTestServer(); await seedScenario(t.store); });

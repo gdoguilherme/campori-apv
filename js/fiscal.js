@@ -5,6 +5,7 @@ import {
   doFiscalSuggestion, updatePassword, SCORE_PCTS, generateQrPayload, refreshNow
 } from './api.js';
 import { mountPortalBar } from './portalBar.js';
+import { mountSurveyButton } from './surveyButton.js';
 import { LOCAL_APP, TIMEOUTS } from './config.js';
 import { getServerState, onServerChange, resolveServer } from './net.js';
 import { requestPersistence } from './offlineDb.js';
@@ -59,6 +60,7 @@ export function init() {
   _unsubUnits   = subUnits(units => { S.units = units; render(); });
 
   if (LOCAL_APP) initQueue();
+  mountSurveyButton({ offsetBottom: '3.6rem' });
   mountPortalBar({
     getPending: async () => (LOCAL_APP ? (await listFiscalQueue(S.user.id)).filter(q => q.status === FQ_STATUS.PENDENTE).length : 0),
     syncNow: async () => (LOCAL_APP ? syncFiscalNow({ manual: true }) : (await refreshNow(), { sent: 0 }))

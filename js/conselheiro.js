@@ -10,6 +10,7 @@ import { TIMEOUTS } from './config.js';
 import { isPersistent, requestPersistence } from './offlineDb.js';
 import { rankingStampHtml } from './ranking.js';
 import { mountPortalBar } from './portalBar.js';
+import { mountSurveyButton } from './surveyButton.js';
 import {
   STATUS, listQueue, enqueueScan, syncNow, refreshSnapshot, loadSnapshot, clearSnapshot,
   startAutoSync, onQueueChange, onAutoSyncResult, getSyncState
@@ -63,6 +64,7 @@ export async function init() {
   onServerChange(() => reloadFromStore().then(softRender));
   onAutoSyncResult(sum => notifySync(sum, false));
   startAutoSync();
+  mountSurveyButton({ offsetBottom: '7.6rem' });
   mountPortalBar({
     offsetBottom: '4.5rem',
     getPending: async () => pendingItems().length,

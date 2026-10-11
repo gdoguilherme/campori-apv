@@ -7,7 +7,7 @@ import { fromCloud } from './convert.js';
 import { withTimeout, classifyError } from './errors.js';
 
 // auditLog não desce (só sobe); os demais refletem a nuvem
-export const PULL_COLLECTIONS = ['regions', 'units', 'requirements', 'users', 'participants', 'disciplinaryActions', 'submissions'];
+export const PULL_COLLECTIONS = ['regions', 'units', 'requirements', 'users', 'participants', 'disciplinaryActions', 'submissions', 'surveys', 'surveyResponses'];
 const READ_TIMEOUT_MS = 45_000;
 
 export function createPuller({ store, log, now = () => Date.now(), readTimeoutMs = READ_TIMEOUT_MS }) {

@@ -9,6 +9,7 @@ import { dataRouter } from './routes/data.js';
 import { businessRouter } from './routes/business.js';
 import { uploadRouter } from './routes/upload.js';
 import { syncRouter } from './routes/sync.js';
+import { surveyRouter } from './routes/survey.js';
 import { statusRouter } from './routes/status.js';
 import { createPageInjector } from './html-inject.js';
 import { COLLECTIONS } from './db.js';
@@ -63,6 +64,7 @@ export function createApp({ store, config, log, tls = () => null, engine = null,
   app.use('/upload', uploadRouter(ctx));
   app.use('/data', dataRouter(ctx));
   app.use('/sync', syncRouter({ ...ctx, engine }));
+  app.use('/surveys', surveyRouter(ctx));
   app.use('/status', statusRouter({ store, config, engine, startedAt, isLocalRequest, tls }));   // painel de status do PC
   app.use('/', businessRouter(ctx));
   // upload sem login (igual à nuvem): sem "adivinhar" tipo, e documentos ativos (html/svg/xml) não executam nada

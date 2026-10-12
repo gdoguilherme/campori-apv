@@ -1,6 +1,9 @@
 const express     = require('express');
 const cors        = require('cors');
 const uploadRoute = require('./routes/upload');
+const usersRoute  = require('./routes/users');
+const qrRoute     = require('./routes/qr');
+const syncRoute   = require('./routes/sync');
 
 const app  = express();
 const PORT = process.env.PORT || 8080;
@@ -25,8 +28,13 @@ app.use(cors({
   },
 }));
 
+app.use(express.json());
+
 // ── ROTAS ─────────────────────────────────────────────────────
 app.use('/upload', uploadRoute);
+app.use('/users', usersRoute);
+app.use('/qr', qrRoute);
+app.use('/sync', syncRoute);
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true, uptime: Math.round(process.uptime()) });

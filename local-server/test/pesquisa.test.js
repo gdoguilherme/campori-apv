@@ -254,7 +254,7 @@ test('front: aba do admin, botão nos portais (só com pesquisa aberta), formul�
   for (const fn of ['addSurveyQuestion', 'removeSurveyQuestion', 'moveSurveyQuestion']) assert.match(admin.split('\n').find(l => new RegExp(`^\\s+${fn}\\(`).test(l)), /S\.surveyNoRead = true; render\(\)/, `${fn}: o re-render não pode reler o formulário e desfazer a alteração`);
   for (const f of ['js/conselheiro.js', 'js/regiao.js', 'js/fiscal.js']) { assert.match(read(f), /import \{ mountSurveyButton \}/, f); assert.match(read(f), /mountSurveyButton\(\{/, f); }
   const btn = read('js/surveyButton.js');
-  assert.match(btn, /📝 Pesquisa de Satisfação/); assert.match(btn, /a\.hidden = !\(list && list\.length\)/, 'some quando não há pesquisa aberta'); assert.match(btn, /getCachedOpenSurveys/, 'aparece offline');
+  assert.match(btn, /📝 Pesquisa de Satisfação/); assert.match(btn, /a\.hidden = !last\.length/, 'some quando não há pesquisa aberta'); assert.match(btn, /getCachedOpenSurveys/, 'aparece offline');
   const page = read('js/pesquisa.js');
   assert.match(page, /guardPage\(\['counselor', 'region', 'judge'\]\)/); assert.match(page, /enqueueSurveyResponse/); assert.match(page, /Obrigado pela sua resposta/);
   assert.match(page, /Anônima/); assert.ok(!/userId|username/.test(read('js/surveyQueue.js').split('\n').filter(l => /submitSurveyResponse\(\{/.test(l)).join('')), 'o envio não leva usuário');

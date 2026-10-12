@@ -149,3 +149,9 @@ export function buildSurveyCsv(survey, responses, { regionName = id => id || '',
   }
   return '﻿' + lines.join('\r\n');
 }
+
+// ── escolha entre pesquisas abertas (tela de cartões e selo do botão dos portais) ──────────────
+// Só leitura do marcador LOCAL "já respondeu" (do aparelho): nada disto vai ao servidor.
+export const surveyEmoji = titulo => (/app/i.test(titulo || '') ? '📱' : /evento/i.test(titulo || '') ? '🎪' : '📝');
+export const countPendingSurveys = (surveys, isAnswered) => (surveys || []).filter(s => !isAnswered(s.id)).length;
+export const pendingLabel = n => (n === 1 ? '1 pendente' : `${n} pendentes`);
